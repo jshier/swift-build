@@ -524,6 +524,9 @@ public final class SwiftDriverJobTaskAction: TaskAction, BuildValueValidatingTas
                                                   dynamicExecutionDelegate: dynamicExecutionDelegate,
                                                   outputDelegate: outputDelegate,
                                                   enableDiagnosticRemarks: casOpts.enableDiagnosticRemarks) {
+                    // Report the replayed job as finished so the driver's build record treats its
+                    // inputs as up to date. There is no process, so use an invalid pid.
+                    try plannedBuild?.jobFinished(job: driverJob, arguments: options.commandLine, pid: llbuild_pid_t.invalid.pid, environment: environment, exitStatus: .exit(0), output: ByteString())
                     return .succeeded
             }
 
