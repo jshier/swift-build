@@ -128,6 +128,9 @@ public final class Workspace: ProjectModelItem, PIFObject, ReferenceLookupContex
     /// The map of targets to projects.
     private let projectsByTarget: [Target: Project]
 
+    /// The GUIDs of targets which are the dynamic variant of a standard target.
+    private let dynamicVariantGUIDsOfStandardTargets: Set<String>
+
     /// The map of all references keyed by GUID.
     private let referencesByGUID: [String: Reference]
 
@@ -175,6 +178,7 @@ public final class Workspace: ProjectModelItem, PIFObject, ReferenceLookupContex
         self.projectsByGUID = try projects.byGUID
         self.targetsByGUID = try projects.targetsByGUID
         self.projectsByTarget = try projects.byTarget
+        self.dynamicVariantGUIDsOfStandardTargets = projects.dynamicVariantGUIDsOfStandardTargets
         self.referencesByGUID = referencesByGUID
         self.projectsByName = Dictionary(grouping: projects, by: { $0.name })
     }
@@ -219,6 +223,7 @@ public final class Workspace: ProjectModelItem, PIFObject, ReferenceLookupContex
         self.projectsByGUID = try projects.byGUID
         self.targetsByGUID = try projects.targetsByGUID
         self.projectsByTarget = try projects.byTarget
+        self.dynamicVariantGUIDsOfStandardTargets = projects.dynamicVariantGUIDsOfStandardTargets
         self.referencesByGUID = referencesByGUID
         self.projectsByName = Dictionary(grouping: projects, by: { $0.name })
     }
@@ -309,6 +314,11 @@ public final class Workspace: ProjectModelItem, PIFObject, ReferenceLookupContex
         }
     }
 
+    /// Whether the target is the dynamic variant of a standard target, e.g. the variant of a package library target which is built when it is linked into more than one image.
+    public func isDynamicVariantOfStandardTarget(_ target: Target) -> Bool {
+        return dynamicVariantGUIDsOfStandardTargets.contains(target.guid)
+    }
+
     /// Returns the dynamic target variant if this target has a dynamic variant, otherwise returns the input target.
     public func dynamicTarget(for guid: String, dynamicallyBuildingTargets: Set<Target> = []) -> Target? {
         return target(for: guid).map { target in dynamicTarget(for: target, dynamicallyBuildingTargets: dynamicallyBuildingTargets) } ?? nil
@@ -393,6 +403,10 @@ public struct WorkspaceDiff: CustomStringConvertible, Sendable {
 }
 
 extension Array where Element == Project {
+    fileprivate var dynamicVariantGUIDsOfStandardTargets: Set<String> {
+        Set(flatMap(\.targets).compactMap { ($0 as? StandardTarget)?.dynamicTargetVariantGuid })
+    }
+
     fileprivate var targetsByGUID: [String: Target] {
         get throws {
             try Dictionary(grouping: flatMap(\.targets), by: \.guid).compactMapValues({ guid, targets in

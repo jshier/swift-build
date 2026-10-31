@@ -3374,6 +3374,11 @@ private class SettingsBuilder: ProjectMatchLookup, TripleLookup {
                 push(createTableFromUserSettings(settingsExtension.addProductTypeDefaults(productType: productType)), .exportedForNative)
             }
 
+            // A package target's dynamic variant is built instead of the target when it's linked into more than one image, which depends on which targets are being built. Install its Swift module where the target installs it, so clients find the same module whatever the linkage, and their compilation cache keys don't change between e.g. building and building for testing.
+            if project?.isPackage == true, workspaceContext.workspace.isDynamicVariantOfStandardTarget(target) {
+                pushTable(.exportedForNative) { $0.push(BuiltinMacros.SWIFT_INSTALL_MODULE_FOR_DEPLOYMENT, literal: false) }
+            }
+
             // Save the bound product type.
             self.productType = productType
         } else {

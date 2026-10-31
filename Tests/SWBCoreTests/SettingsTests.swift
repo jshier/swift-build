@@ -5189,6 +5189,46 @@ import SWBTestSupport
         #expect(settings.globalScope.evaluate(BuiltinMacros._RESOLVED_CONFIGURATION) == "Release")
     }
 
+    /// The dynamic variant of a package target installs its Swift module where the target does, unless the package says otherwise.
+    @Test
+    func packageDynamicTargetVariantSwiftModuleInstallation() async throws {
+        let core = try await getCore()
+
+        let testWorkspace = try TestWorkspace(
+            "Workspace",
+            projects: [
+                TestPackageProject(
+                    "Package",
+                    groupTree: TestGroup("SomeFiles", children: [TestFile("Lib.swift")]),
+                    buildConfigurations: [TestBuildConfiguration("Debug")],
+                    targets: [
+                        TestStandardTarget("Lib", type: .objectFile, buildPhases: [TestSourcesBuildPhase(["Lib.swift"])], dynamicTargetVariantName: "Lib-dynamic"),
+                        TestStandardTarget("Lib-dynamic", type: .framework, buildPhases: [TestSourcesBuildPhase(["Lib.swift"])]),
+                        TestStandardTarget("Other", type: .objectFile, buildPhases: [TestSourcesBuildPhase(["Lib.swift"])], dynamicTargetVariantName: "Other-dynamic"),
+                        TestStandardTarget(
+                            "Other-dynamic", type: .framework,
+                            buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: ["SWIFT_INSTALL_MODULE_FOR_DEPLOYMENT": "YES"])],
+                            buildPhases: [TestSourcesBuildPhase(["Lib.swift"])]),
+                        TestStandardTarget("Framework", type: .framework, buildPhases: [TestSourcesBuildPhase(["Lib.swift"])]),
+                    ])
+            ]).load(core)
+
+        let context = try await contextForTestData(testWorkspace)
+        let buildRequestContext = BuildRequestContext(workspaceContext: context)
+        let testProject = context.workspace.projects[0]
+        func installsModuleForDeployment(_ targetName: String) throws -> Bool {
+            let target = try #require(testProject.targets.first { $0.name == targetName })
+            let settings = Settings(workspaceContext: context, buildRequestContext: buildRequestContext, parameters: BuildParameters(action: .build, configuration: "Debug"), project: testProject, target: target)
+            return settings.globalScope.evaluate(BuiltinMacros.SWIFT_INSTALL_MODULE_FOR_DEPLOYMENT)
+        }
+
+        #expect(try !installsModuleForDeployment("Lib-dynamic"))
+        // The package's own settings take precedence.
+        #expect(try installsModuleForDeployment("Other-dynamic"))
+        // A framework which isn't a dynamic variant keeps the product type's default.
+        #expect(try installsModuleForDeployment("Framework"))
+    }
+
     @Test
     func frameworkPoundBundleAvailability() async throws {
         let testWorkspace = try await TestWorkspace(

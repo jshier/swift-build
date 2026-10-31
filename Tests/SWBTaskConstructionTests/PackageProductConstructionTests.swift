@@ -164,6 +164,107 @@ fileprivate struct PackageProductConstructionTests: CoreBasedTests {
         }
     }
 
+    /// A package target linked into both an app and the app's hosted tests is built as its dynamic variant only when the tests are built. Its Swift module must still be installed where the target installs it, so clients compile the same way whichever is built.
+    @Test(.requireSDKs(.macOS))
+    func promotedPackageTargetInstallsSwiftModuleWhereTargetDoes() async throws {
+        let swiftSettings = [
+            "SWIFT_EXEC": try await swiftCompilerPath.str,
+            "SWIFT_VERSION": "5",
+            "PRODUCT_NAME": "$(TARGET_NAME)",
+            "CODE_SIGNING_ALLOWED": "NO",
+            "GENERATE_INFOPLIST_FILE": "YES",
+        ]
+        let packageTargetSettings = [
+            "SDKROOT": "auto",
+            "SDK_VARIANT": "auto",
+            "SUPPORTED_PLATFORMS": "$(AVAILABLE_PLATFORMS)",
+        ]
+        let testProject = TestProject(
+            "aProject",
+            groupTree: TestGroup("SomeFiles", children: [TestFile("App.swift"), TestFile("AppTests.swift")]),
+            buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: swiftSettings)],
+            targets: [
+                TestStandardTarget(
+                    "App", type: .application,
+                    buildPhases: [
+                        TestSourcesBuildPhase(["App.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("LibProduct"))]),
+                    ],
+                    dependencies: ["LibProduct"]),
+                TestStandardTarget(
+                    "AppTests", type: .unitTest,
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: [
+                        "BUNDLE_LOADER": "$(BUILT_PRODUCTS_DIR)/App.app/Contents/MacOS/App",
+                    ])],
+                    buildPhases: [
+                        TestSourcesBuildPhase(["AppTests.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("LibTestSupportProduct"))]),
+                    ],
+                    dependencies: ["App", "LibTestSupportProduct"]),
+            ])
+        let testPackage = TestPackageProject(
+            "Package",
+            groupTree: TestGroup("OtherFiles", children: [TestFile("Lib.swift"), TestFile("LibTestSupport.swift")]),
+            buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: swiftSettings)],
+            targets: [
+                TestPackageProductTarget(
+                    "LibProduct",
+                    frameworksBuildPhase: TestFrameworksBuildPhase([TestBuildFile(.target("Lib"))]),
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings)],
+                    dependencies: ["Lib"]),
+                TestPackageProductTarget(
+                    "LibTestSupportProduct",
+                    frameworksBuildPhase: TestFrameworksBuildPhase([TestBuildFile(.target("LibTestSupport"))]),
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings)],
+                    dependencies: ["LibTestSupport"]),
+                TestStandardTarget(
+                    "Lib", type: .objectFile,
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings)],
+                    buildPhases: [TestSourcesBuildPhase(["Lib.swift"])],
+                    dynamicTargetVariantName: "Lib-dynamic"),
+                TestStandardTarget(
+                    "Lib-dynamic", type: .framework,
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings.merging([
+                        "PRODUCT_NAME": "Lib",
+                        "TARGET_BUILD_DIR": "$(TARGET_BUILD_DIR)/PackageFrameworks",
+                    ], uniquingKeysWith: { $1 }))],
+                    buildPhases: [TestSourcesBuildPhase(["Lib.swift"])]),
+                TestStandardTarget(
+                    "LibTestSupport", type: .objectFile,
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings)],
+                    buildPhases: [
+                        TestSourcesBuildPhase(["LibTestSupport.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("Lib"))]),
+                    ],
+                    dependencies: ["Lib"]),
+            ])
+        let tester = try await TaskConstructionTester(getCore(), TestWorkspace("aWorkspace", projects: [testProject, testPackage]))
+        let builtProductsDir = "/tmp/aWorkspace/Package/build/Debug"
+
+        func checkSwiftModuleInstallation(buildingTests: Bool) async throws {
+            let parameters = BuildParameters(configuration: "Debug")
+            let targets = try (["App"] + (buildingTests ? ["AppTests"] : [])).map { name in
+                BuildRequest.BuildTargetInfo(parameters: parameters, target: try #require(tester.workspace.allTargets.first { $0.name == name }))
+            }
+            let buildRequest = BuildRequest(parameters: parameters, buildTargets: targets, continueBuildingAfterErrors: true, useParallelTargets: true, useImplicitDependencies: false, useDryRun: false)
+            let libTargetName = buildingTests ? "Lib-dynamic" : "Lib"
+
+            await tester.checkBuild(parameters, runDestination: .macOS, buildRequest: buildRequest) { results in
+                results.checkNoErrors()
+                results.checkTarget(libTargetName) { target in
+                    let moduleCopies = results.findMatchingTasks([.matchTarget(target), .matchRuleType("Copy")]).filter { $0.ruleInfo[1].contains(".swiftmodule/") }
+                    #expect(!moduleCopies.isEmpty)
+                    for task in moduleCopies {
+                        #expect(task.ruleInfo[1].hasPrefix("\(builtProductsDir)/Lib.swiftmodule/"), "unexpected module location: \(task.ruleInfo[1])")
+                    }
+                }
+            }
+        }
+
+        try await checkSwiftModuleInstallation(buildingTests: false)
+        try await checkSwiftModuleInstallation(buildingTests: true)
+    }
+
     @Test(.requireSDKs(.macOS), .requireXcode26())
     func canLinkUsingObjectOnlyFrameworkBuildPhase() async throws {
         let testProject = try await TestProject(

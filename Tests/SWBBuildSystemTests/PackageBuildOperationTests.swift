@@ -766,6 +766,89 @@ fileprivate struct PackageBuildOperationTests: CoreBasedTests {
         }
     }
 
+
+    /// When a package target starts being built as its dynamic variant (here, because a second image links it), clients must compile against the variant's module, not a module the target left behind. Scenario from swiftlang/swift-build#1874.
+    @Test(.requireSDKs(.macOS))
+    func packageTargetBecomingDynamicKeepsSwiftModuleLocation() async throws {
+        try await withTemporaryDirectory { tmpDir in
+            let buildDir = tmpDir.join("Build")
+            let settings = [
+                "CODE_SIGNING_ALLOWED": "NO",
+                "GENERATE_INFOPLIST_FILE": "YES",
+                "PRODUCT_NAME": "$(TARGET_NAME)",
+                "SWIFT_VERSION": "6.0",
+                "OBJROOT": buildDir.join("Intermediates.noindex").str,
+                "SYMROOT": buildDir.join("Products").str,
+                "DSTROOT": buildDir.join("Install").str,
+            ]
+            let workspace = TestWorkspace("Workspace", sourceRoot: tmpDir, projects: [
+                TestPackageProject("Consumers", groupTree: TestGroup("Sources", children: [
+                    TestFile("Direct.swift"),
+                    TestFile("Diamond.swift"),
+                ]), buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: settings)], targets: [
+                    TestStandardTarget("Direct", type: .commandLineTool, buildPhases: [
+                        TestSourcesBuildPhase(["Direct.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("FooProduct"))]),
+                    ], dependencies: ["FooProduct"]),
+                    TestStandardTarget("Diamond", type: .commandLineTool, buildPhases: [
+                        TestSourcesBuildPhase(["Diamond.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("FooProduct")), TestBuildFile(.target("A"))]),
+                    ], dependencies: ["FooProduct", "A"]),
+                ]),
+                TestPackageProject("Package", groupTree: TestGroup("Sources", children: [
+                    TestFile("Foo.swift"),
+                    TestFile("A.swift"),
+                ]), buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: settings)], targets: [
+                    TestPackageProductTarget("FooProduct",
+                                             frameworksBuildPhase: TestFrameworksBuildPhase([TestBuildFile(.target("Foo"))]),
+                                             dependencies: ["Foo"]),
+                    TestStandardTarget("Foo", type: .objectFile,
+                                       buildPhases: [TestSourcesBuildPhase(["Foo.swift"])],
+                                       dynamicTargetVariantName: "Foo-dynamic"),
+                    TestStandardTarget("Foo-dynamic", type: .framework,
+                                       buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: [
+                                        "PRODUCT_NAME": "Foo",
+                                        "SWIFT_MODULE_NAME": "Foo",
+                                       ])],
+                                       buildPhases: [TestSourcesBuildPhase(["Foo.swift"])]),
+                    TestStandardTarget("A", type: .framework, buildPhases: [
+                        TestSourcesBuildPhase(["A.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("Foo"))]),
+                    ], dependencies: ["Foo"]),
+                ]),
+            ])
+            let tester = try await BuildOperationTester(getCore(), workspace, simulated: false)
+            let consumerRoot = tester.workspace.projects[0].sourceRoot
+            let packageRoot = tester.workspace.projects[1].sourceRoot
+            try localFS.createDirectory(consumerRoot, recursive: true)
+            try localFS.createDirectory(packageRoot, recursive: true)
+            let originalSource = "public struct FooValue { public init() {} ; public func oldMethod() -> Int { 1 } }\n"
+            try localFS.write(packageRoot.join("Foo.swift"), contents: ByteString(encodingAsUTF8: originalSource))
+            try localFS.write(packageRoot.join("A.swift"), contents: "import Foo\npublic func a() -> Int { FooValue().oldMethod() }\n")
+            try localFS.write(consumerRoot.join("Direct.swift"), contents: "import Foo\n@main struct DirectMain { static func main() { print(FooValue().oldMethod()) } }\n")
+            try localFS.write(consumerRoot.join("Diamond.swift"), contents: "import Foo\nimport A\n@main struct DiamondMain { static func main() { print(FooValue().newMethod(), a()) } }\n")
+
+            // Build only the client which links Foo statically.
+            let parameters = BuildParameters(configuration: "Debug")
+            func request(_ target: SWBCore.Target) -> BuildRequest {
+                BuildRequest(parameters: parameters, buildTargets: [.init(parameters: parameters, target: target)], continueBuildingAfterErrors: false, useParallelTargets: true, useImplicitDependencies: false, useDryRun: false)
+            }
+            try await tester.checkBuild(runDestination: .macOS, buildRequest: request(tester.workspace.projects[0].targets[0]), persistent: true) { results in
+                results.checkNoDiagnostics()
+            }
+            let products = buildDir.join("Products/Debug")
+            #expect(localFS.exists(products.join("Foo.swiftmodule")))
+
+            // Add API to Foo and build the client which also links Foo through A, which builds Foo dynamically.
+            try localFS.write(packageRoot.join("Foo.swift"), contents: ByteString(encodingAsUTF8: originalSource + "extension FooValue { public func newMethod() -> Int { 2 } }\n"))
+            try await tester.checkBuild(runDestination: .macOS, buildRequest: request(tester.workspace.projects[0].targets[1]), persistent: true) { results in
+                results.checkTaskExists(.matchTargetName("Foo-dynamic"), .matchRuleType("SwiftDriver Compilation Requirements"))
+                results.checkNoDiagnostics()
+            }
+            #expect(localFS.exists(products.join("Foo.swiftmodule")))
+            #expect(!localFS.exists(products.join("Foo.framework/Modules/Foo.swiftmodule")))
+        }
+    }
 }
 
 extension PackageBuildOperationTests {
