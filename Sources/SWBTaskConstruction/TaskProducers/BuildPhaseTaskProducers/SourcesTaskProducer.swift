@@ -121,8 +121,10 @@ private final class SourcesPhaseBasedTaskGenerationDelegate: TaskGenerationDeleg
     func createTask(_ builder: inout PlannedTaskBuilder) {
         // Determine if this is a task which needs to attach to the generated headers node.
         var producesHeader = false, mayConsumeHeader = false
+        // Tasks which consume object files, such as linking, may also produce one (e.g. for LTO), but don't compile anything which might consume headers.
+        let consumesObjectFiles = builder.inputs.contains { $0.path.fileSuffix == ".o" }
         for output in builder.outputs {
-            if [".o", ".gch"].contains(output.path.fileSuffix) {
+            if [".o", ".gch"].contains(output.path.fileSuffix) && !consumesObjectFiles {
                 mayConsumeHeader = true
             } else if [".h", ".hpp", ".tpp", ".ipp", ".inc", ".pch"].contains(output.path.fileSuffix) {
                 producesHeader = true

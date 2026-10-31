@@ -510,8 +510,6 @@ fileprivate struct TaskConstructionTests: CoreBasedTests {
                             .any,
                             .path("\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.LinkFileList"),
                             .path("\(SRCROOT)/build/Debug"),
-                            .namePattern(.and(.prefix("target-"), .suffix("-generated-headers"))),
-                            .namePattern(.and(.prefix("target-"), .suffix("-swift-generated-headers"))),
                             .namePattern(.prefix("target-")),
                             .namePattern(.prefix("target-"))])
 
@@ -910,8 +908,6 @@ fileprivate struct TaskConstructionTests: CoreBasedTests {
                             .any,
                             .any,
                             // Note that there is no link file list.
-                            .namePattern(.and(.prefix("target-"), .suffix("-generated-headers"))),
-                            .namePattern(.and(.prefix("target-"), .suffix("-swift-generated-headers"))),
                             .namePattern(.prefix("target-")),
                             .namePattern(.prefix("target-"))])
 
@@ -1473,8 +1469,6 @@ fileprivate struct TaskConstructionTests: CoreBasedTests {
                         .path("\(SRCROOT)/Exports.exp"),
                         .path("\(SRCROOT)/Unexports.exp"),
                         .path("\(SRCROOT)/build/Release"),
-                        .namePattern(.and(.prefix("target-"), .suffix("-generated-headers"))),
-                        .namePattern(.and(.prefix("target-"), .suffix("-swift-generated-headers"))),
                         .namePattern(.prefix("target-")),
                         .namePattern(.prefix("target-")),
                     ])

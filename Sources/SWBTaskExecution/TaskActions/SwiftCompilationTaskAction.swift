@@ -25,7 +25,8 @@ public final class SwiftCompilationTaskAction: SwiftDriverJobSchedulingTaskActio
     }
 
     public override func untrackedPrimaryJobs(for plannedBuild: LibSwiftDriver.PlannedBuild, driverPayload: SwiftDriverPayload) -> ArraySlice<LibSwiftDriver.PlannedBuild.PlannedSwiftDriverJob> {
-        plannedBuild.compilationRequirementsPlannedDriverJobs()
+        // The compilation requirements task runs the emit-module job, and jobs which consume its outputs request it themselves. Waiting for it here would make linking the compiled objects wait for the module, which in an incremental build is usually the slowest job.
+        plannedBuild.compilationRequirementsPlannedDriverJobs().filter { !$0.driverJob.categorizer.isEmitModule }[...]
     }
 
     public override func secondaryJobs(for plannedBuild: LibSwiftDriver.PlannedBuild, driverPayload: SwiftDriverPayload) -> ArraySlice<LibSwiftDriver.PlannedBuild.PlannedSwiftDriverJob> {

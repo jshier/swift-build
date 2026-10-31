@@ -1949,8 +1949,6 @@ fileprivate struct BuildToolTaskConstructionTests: CoreBasedTests {
                                 .equal("y.tab.o"),
                                 .suffix(".LinkFileList"),
                                 .suffix("Debug-iphoneos"),
-                                .and(.prefix("target"), .suffix("-generated-headers")),
-                                .and(.prefix("target"), .suffix("-swift-generated-headers")),
                                 .and(.prefix("target"), .suffix("Producer")),
                                 .and(.prefix("target"), .suffix("-begin-linking")),
                             ])

@@ -3172,8 +3172,12 @@ fileprivate struct SwiftDriverTests: CoreBasedTests {
                         results.checkTaskRequested(compilationTask, .matchTargetName(targetName), .matchRuleType("SwiftCompile"), .matchRuleItem(SRCROOT.join("Sources/file\(targetNameSuffix)1.swift").str))
                         results.checkTaskRequested(compilationTask, .matchTargetName(targetName), .matchRuleType("SwiftCompile"), .matchRuleItem(SRCROOT.join("Sources/file\(targetNameSuffix)2.swift").str))
                         results.checkTaskRequested(compilationTask , .matchRuleType("SwiftDriver"), .matchTargetName(targetName))
-                        results.checkTaskRequested(compilationTask, .matchTargetName(targetName), .matchRule(["SwiftEmitModule", "normal", "arm64e", "Emitting module for \(targetName)"]))
+                        // The emit-module job is run by the compilation requirements task; compilation, and so linking, doesn't wait for it.
                         results.checkNoUncheckedTasksRequested(compilationTask)
+                    }
+
+                    try results.checkTask(.matchRuleType("Ld"), .matchTargetName(targetName)) { linkTask in
+                        try results.checkTaskDoesNotFollow(linkTask, .matchTargetName(targetName), .matchRuleType("SwiftEmitModule"))
                     }
 
                     results.checkTask(.matchTargetName(targetName), .matchRule(["SwiftCompile", "normal", "arm64e", "Compiling file\(targetNameSuffix)1.swift", SRCROOT.join("Sources/file\(targetNameSuffix)1.swift").str])) { compileFile1Task in
@@ -3838,7 +3842,7 @@ fileprivate struct SwiftDriverTests: CoreBasedTests {
 
                             results.checkTaskRequested(compilationTask, .matchTargetName(targetName), .matchRuleType("SwiftCompile"), .matchRuleItem(SRCROOT.join("Sources/file\(targetNameSuffix)1.swift").str))
                             results.checkTaskRequested(compilationTask, .matchTargetName(targetName), .matchRuleType("SwiftCompile"), .matchRuleItem(SRCROOT.join("Sources/file\(targetNameSuffix)2.swift").str))
-                            results.checkTaskRequested(compilationTask, .matchTargetName(targetName), .matchRule(["SwiftEmitModule", "normal", arch, "Emitting module for \(targetName)"]))
+                            // The emit-module job is run by the compilation requirements task; compilation, and so linking, doesn't wait for it.
                             results.checkTaskRequested(compilationTask, .matchRule(["SwiftDriver", targetName, "normal", arch, "com.apple.xcode.tools.swift.compiler"]))
                             results.checkNoUncheckedTasksRequested(compilationTask)
                         }

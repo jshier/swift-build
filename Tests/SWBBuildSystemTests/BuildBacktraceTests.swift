@@ -220,7 +220,7 @@ fileprivate struct BuildBacktraceTests: CoreBasedTests {
                     results.checkBacktrace(task, [
                         "<category='dynamicTaskRegistration' description=''>",
                         "<category='dynamicTaskRequest' description='task was scheduled by the Swift driver'>",
-                        "<category='ruleNeverBuilt' description=''Compile TargetFoo (\(results.runDestinationTargetArchitecture))' had never run'>"
+                        "<category='ruleNeverBuilt' description=''Unblock downstream dependents of TargetFoo (\(results.runDestinationTargetArchitecture))' had never run'>"
                     ])
                 }
                 results.checkTask(.matchTargetName("TargetFoo"), .matchRuleType("SwiftCompile")) { task in
@@ -247,7 +247,7 @@ fileprivate struct BuildBacktraceTests: CoreBasedTests {
                     results.checkBacktrace(task, [
                         "<category='dynamicTaskRegistration' description=''>",
                         "<category='dynamicTaskRequest' description='task was scheduled by the Swift driver'>",
-                        "<category='ruleInputRebuilt' description='an input of 'Compile TargetFoo (\(results.runDestinationTargetArchitecture))' changed'>",
+                        "<category='ruleInputRebuilt' description='an input of 'Unblock downstream dependents of TargetFoo (\(results.runDestinationTargetArchitecture))' changed'>",
                         "<category='ruleHadInvalidValue' description='file '\(tmpDirPath.str)/Test/aProject/Sources/foo.swift' changed'>"
                     ])
                 }

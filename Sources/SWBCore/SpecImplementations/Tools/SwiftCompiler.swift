@@ -3071,7 +3071,11 @@ public final class SwiftCompilerSpec : CompilerSpec, SpecIdentifierType, SwiftDi
             let currentBuildConfigurationFilter = BuildConfigurationFilter(scope)
             let containsSources = (producer.configuredTarget?.target as? StandardTarget)?.sourcesBuildPhase?.buildFiles.filter { currentPlatformFilter.matches($0.platformFilters) && currentBuildConfigurationFilter.matches($0.buildConfigurationFilters)
             }.isEmpty == false
-            if containsSources && inputFileTypes.contains(where: { $0.conformsTo(identifier: "sourcecode.swift") }) && scope.evaluate(BuiltinMacros.GCC_GENERATE_DEBUGGING_SYMBOLS, lookup: lookup) && !scope.evaluate(BuiltinMacros.PLATFORM_REQUIRES_SWIFT_MODULEWRAP, lookup: lookup) {
+            // When building with explicit modules, the driver/frontend will use -debug-module-path to record the information necessary to find the swiftmodule when debugging, so the linker doesn't need to register it. Registering it would also make linking wait for the module.
+            let explicitModulesEnabled = await swiftExplicitModuleBuildEnabled(producer, scope, delegate)
+            let compilerSupportsExplicitModulesBasedDebugInfo = (try? await discoveredCommandLineToolSpecInfo(producer, scope, delegate))?.hasFeature(DiscoveredSwiftCompilerToolSpecInfo.FeatureFlag.debugInfoExplicitDependency.rawValue) == true
+            let debugInfoRecordsModulePath = explicitModulesEnabled && compilerSupportsExplicitModulesBasedDebugInfo
+            if containsSources && inputFileTypes.contains(where: { $0.conformsTo(identifier: "sourcecode.swift") }) && scope.evaluate(BuiltinMacros.GCC_GENERATE_DEBUGGING_SYMBOLS, lookup: lookup) && !scope.evaluate(BuiltinMacros.PLATFORM_REQUIRES_SWIFT_MODULEWRAP, lookup: lookup) && !debugInfoRecordsModulePath {
                 let moduleName = scope.evaluate(BuiltinMacros.SWIFT_MODULE_NAME, lookup: lookup)
                 let moduleFileDir = scope.evaluate(BuiltinMacros.PER_SLICE_MODULE_FILE_DIR, lookup: lookup)
                 let moduleFilePath = moduleFileDir.join(moduleName + ".swiftmodule")
