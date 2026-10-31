@@ -1631,12 +1631,10 @@ internal final class OperationSystemAdaptor: SWBLLBuild.BuildSystemDelegate, Act
 
             self.diagnoseInvalidNegativeStatCacheEntries(buildSucceeded: buildSucceeded)
 
-            // If the build failed, make sure we flush any pending incremental build records.
-            // Usually, driver instances are cleaned up and write out their incremental build records when a target finishes building. However, this won't necessarily be the case if the build fails. Ensure we write out any pending records before tearing down the graph so we don't use a stale record on a subsequent build.
-            if !buildSucceeded {
-                for diagnostic in self.dynamicOperationContext.swiftModuleDependencyGraph.cleanUpForAllKeys() {
-                    self.buildOutputDelegate.emit(diagnostic)
-                }
+            // Make sure we flush any pending incremental build records.
+            // Usually, driver instances are cleaned up and write out their incremental build records when a target finishes building. However, this won't necessarily be the case, for example if the build fails. Since planning doesn't write the records, ensure we write out any pending records before tearing down the graph so we don't use a stale record on a subsequent build.
+            for diagnostic in self.dynamicOperationContext.swiftModuleDependencyGraph.cleanUpForAllKeys() {
+                self.buildOutputDelegate.emit(diagnostic)
             }
 
             // Reset the DynamicOperationContext to free cached info from the finished build.

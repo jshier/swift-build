@@ -628,7 +628,8 @@ public final class LibSwiftDriver {
         do {
             let jobs = try driver.planBuild()
             if !dryRun {
-                try driver.run(jobs: jobs)
+                // The executor only records the planned jobs. The incremental build information is written once they've run, when the driver is cleaned up (`SwiftModuleDependencyGraph.cleanUp(key:)` and `cleanUpForAllKeys()`).
+                try driver.run(jobs: jobs, writeIncrementalBuildInformation: false)
                 if let plannedBuild = executor.movePlannedBuild() {
                     _plannedBuild = plannedBuild
                     intermoduleDependencyGraph = driver.intermoduleDependencyGraph

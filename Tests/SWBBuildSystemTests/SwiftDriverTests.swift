@@ -2338,6 +2338,53 @@ fileprivate struct SwiftDriverTests: CoreBasedTests {
         }
     }
 
+    /// Planning doesn't write the incremental build information; it's written once the jobs have run.
+    @Test(.requireSDKs(.macOS))
+    func planningDoesNotWriteIncrementalBuildInformation() async throws {
+        try await withTemporaryDirectory { tmpDirPath async throws -> Void in
+            let testWorkspace = try await TestWorkspace(
+                "Test",
+                sourceRoot: tmpDirPath.join("Test"),
+                projects: [
+                    TestProject(
+                        "aProject",
+                        groupTree: TestGroup("Sources", path: "Sources", children: [TestFile("a.swift"), TestFile("b.swift")]),
+                        buildConfigurations: [
+                            TestBuildConfiguration("Debug", buildSettings: [
+                                "PRODUCT_NAME": "$(TARGET_NAME)",
+                                "SWIFT_VERSION": swiftVersion,
+                                "SWIFT_USE_INTEGRATED_DRIVER": "YES",
+                            ])
+                        ],
+                        targets: [
+                            TestStandardTarget("Lib", type: .staticLibrary, buildPhases: [TestSourcesBuildPhase(["a.swift", "b.swift"])]),
+                        ])
+                ])
+            let tester = try await BuildOperationTester(getCore(), testWorkspace, simulated: false)
+            let sources = testWorkspace.sourceRoot.join("aProject/Sources")
+            try await tester.fs.writeFileContents(sources.join("a.swift")) { $0 <<< "public func a() -> Int { 1 }\n" }
+            try await tester.fs.writeFileContents(sources.join("b.swift")) { $0 <<< "public func b() -> Int { 2 }\n" }
+
+            try await tester.checkBuild(runDestination: .macOS, persistent: true) { results in
+                results.checkNoDiagnostics()
+            }
+
+            // Make writing the incremental build information fail, so that each write attempt is diagnosed.
+            let objectsDir = testWorkspace.sourceRoot.join("aProject/build/aProject.build/Debug/Lib.build/Objects-normal")
+            let priors = try #require(try localFS.traverse(objectsDir) { $0.fileSuffix == ".priors" ? $0 : nil }.only)
+            try tester.fs.remove(priors)
+            try tester.fs.createDirectory(priors.join("not-a-file"), recursive: true)
+
+            try await tester.fs.writeFileContents(sources.join("a.swift")) { $0 <<< "public func a() -> Int { 3 }\n" }
+            try await tester.checkBuild(runDestination: .macOS, persistent: true) { results in
+                results.checkWarning(.contains("Could not read priors"))
+                // Only the write after the compile jobs, not one during planning.
+                results.checkWarning(.contains("could not write dependency graph"))
+                results.checkNoDiagnostics()
+            }
+        }
+    }
+
     @Test(.requireSDKs(.macOS))
     func incrementalBuild_eagerCompilation() async throws {
 
