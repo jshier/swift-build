@@ -624,7 +624,6 @@ fileprivate struct SwiftModuleOnlyTaskConstructionTests: CoreBasedTests {
 
                                             "-output-file-map",
                                             archBuildDir.join("\(tpc.targetName)\(platformSuffix)-OutputFileMap.json").str,
-                                            "-emit-dependencies",
                                             "-emit-module",
                                             "-emit-module-path",
                                             archBuildDir.join("\(tpc.targetName)\(platformSuffix).swiftmodule").str,
@@ -651,8 +650,14 @@ fileprivate struct SwiftModuleOnlyTaskConstructionTests: CoreBasedTests {
                                           task.checkCommandLineDoesNotContain("-index-store-path")
                                       }
 
-                                      // Check the dependency data.
-                                      #expect(task.dependencyData == .makefileIgnoringSubsequentOutputs(archBuildDir.join("\(tpc.targetName)\(platformSuffix)-primary-emit-module.d")))
+                                      // With explicit modules (which need the integrated driver), the dependency scanner reports dependencies instead of make-style dependency files.
+                                      if context.isIntegratedDriver {
+                                          task.checkCommandLineDoesNotContain("-emit-dependencies")
+                                          #expect(task.dependencyData == nil)
+                                      } else {
+                                          task.checkCommandLineContains(["-emit-dependencies"])
+                                          #expect(task.dependencyData == .makefileIgnoringSubsequentOutputs(archBuildDir.join("\(tpc.targetName)\(platformSuffix)-primary-emit-module.d")))
+                                      }
                                   }
     }
 
@@ -702,13 +707,16 @@ fileprivate struct SwiftModuleOnlyTaskConstructionTests: CoreBasedTests {
             // Check the global dictionary.
             let globalDict = try #require(dict[""])
 
-            XCTAssertEqualPropertyListItems(globalDict, .plDict([
+            var expected: [String: PropertyListItem] = [
                 "swift-dependencies": .plString(archBuildDir.join("\(tpc.targetName)\(platformSuffix)-primary.swiftdeps").str),
                 "diagnostics": .plString(archBuildDir.join("\(tpc.targetName)\(platformSuffix)-primary.dia").str),
                 "emit-module-diagnostics": .plString(archBuildDir.join("\(tpc.targetName)\(platformSuffix)-primary-emit-module.dia").str),
-                "emit-module-dependencies": .plString(archBuildDir.join("\(tpc.targetName)\(platformSuffix)-primary-emit-module.d").str),
                 "pch": .plString(archBuildDir.join("\(tpc.targetName)\(platformSuffix)-primary-Bridging-header.pch").str),
-            ]))
+            ]
+            if !context.isIntegratedDriver {
+                expected["emit-module-dependencies"] = .plString(archBuildDir.join("\(tpc.targetName)\(platformSuffix)-primary-emit-module.d").str)
+            }
+            XCTAssertEqualPropertyListItems(globalDict, .plDict(expected))
         }
 
         func checkFileDict(file: String, dict: [String:PropertyListItem]) {
@@ -722,9 +730,9 @@ fileprivate struct SwiftModuleOnlyTaskConstructionTests: CoreBasedTests {
 
             #expect(fileDict["object"] == nil)
 
-            #expect(fileDict.count == 4)
+            #expect(fileDict.count == (context.isIntegratedDriver ? 3 : 4))
             #expect(fileDict["diagnostics"]?.stringValue == archBuildDir.join("\(basename)\(platformSuffix).dia").str)
-            #expect(fileDict["dependencies"]?.stringValue == archBuildDir.join("\(basename)\(platformSuffix).d").str)
+            #expect(fileDict["dependencies"]?.stringValue == (context.isIntegratedDriver ? nil : archBuildDir.join("\(basename)\(platformSuffix).d").str))
             #expect(fileDict["swift-dependencies"]?.stringValue == archBuildDir.join("\(basename)\(platformSuffix).swiftdeps").str)
             #expect(fileDict["swiftmodule"]?.stringValue == archBuildDir.join("\(basename)\(platformSuffix)~partial.swiftmodule").str)
         }

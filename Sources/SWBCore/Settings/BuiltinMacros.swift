@@ -2926,8 +2926,10 @@ public enum SwiftAPIDigesterMode: String, Equatable, Hashable, EnumerationMacroT
     case api = "api"
 }
 
+/// How the dependencies of Swift compilations are registered when explicit modules are enabled (without them, make-style dependencies are always used).
 public enum SwiftDependencyRegistrationMode: String, Equatable, Hashable, EnumerationMacroType {
-    public static let defaultValue: SwiftDependencyRegistrationMode = .makeStyleDependenciesSupplementedByScanner
+    /// The dependency scanner reports the module's dependencies once per module. Make-style dependency files repeat them, and all of the module's sources, for every file of the module, so writing them grows with files × (files + headers) while only one of them is read.
+    public static let defaultValue: SwiftDependencyRegistrationMode = .swiftDependencyScannerOnly
 
     case makeStyleDependenciesSupplementedByScanner = "make-style"
     case swiftDependencyScannerOnly = "dependency-scanner"

@@ -230,9 +230,9 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
                 results.checkTask(.matchTarget(target), .matchRuleType("SwiftDriver Compilation")) { task in
                     task.checkRuleInfo(["SwiftDriver Compilation", target.target.name, "normal", results.runDestinationTargetArchitecture, "com.apple.xcode.tools.swift.compiler"])
                     if LibSwiftDriver.supportsDriverFlag(spelled: "-Isystem") && swiftFeatures.has(.Isystem) {
-                        task.checkCommandLineContains([swiftCompilerPath.str, "-module-name", "AppTarget", "-O", "@\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.SwiftFileList", "-sdk", core.loadSDK(.macOS).path.str, "-target", "\(results.runDestinationTargetArchitecture)-apple-macos\(MACOSX_DEPLOYMENT_TARGET)", /* options from the xcspec which sometimes change appear here */ "-swift-version", swiftVersion, "-I", "\(SRCROOT)/build/Debug", "-I", "/tmp/include", "-Isystem", "/tmp/system/include", "-F", "\(SRCROOT)/build/Debug", "-c", "-j\(compilerParallelismLevel)", "-incremental", "-output-file-map", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-OutputFileMap.json", "-emit-dependencies", "-emit-module", "-emit-module-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.swiftmodule", "-serialize-diagnostics", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-generated-files.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-own-target-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-all-target-headers.hmap", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-project-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/Debug/include", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources-normal/\(results.runDestinationTargetArchitecture)", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources", "-emit-objc-header", "-emit-objc-header-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-Swift.h", "-working-directory", SRCROOT])
+                        task.checkCommandLineContains([swiftCompilerPath.str, "-module-name", "AppTarget", "-O", "@\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.SwiftFileList", "-sdk", core.loadSDK(.macOS).path.str, "-target", "\(results.runDestinationTargetArchitecture)-apple-macos\(MACOSX_DEPLOYMENT_TARGET)", /* options from the xcspec which sometimes change appear here */ "-swift-version", swiftVersion, "-I", "\(SRCROOT)/build/Debug", "-I", "/tmp/include", "-Isystem", "/tmp/system/include", "-F", "\(SRCROOT)/build/Debug", "-c", "-j\(compilerParallelismLevel)", "-incremental", "-output-file-map", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-OutputFileMap.json", "-emit-module", "-emit-module-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.swiftmodule", "-serialize-diagnostics", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-generated-files.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-own-target-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-all-target-headers.hmap", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-project-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/Debug/include", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources-normal/\(results.runDestinationTargetArchitecture)", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources", "-emit-objc-header", "-emit-objc-header-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-Swift.h", "-working-directory", SRCROOT])
                     } else {
-                        task.checkCommandLineContains([swiftCompilerPath.str, "-module-name", "AppTarget", "-O", "@\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.SwiftFileList", "-sdk", core.loadSDK(.macOS).path.str, "-target", "\(results.runDestinationTargetArchitecture)-apple-macos\(MACOSX_DEPLOYMENT_TARGET)", /* options from the xcspec which sometimes change appear here */ "-swift-version", swiftVersion, "-I", "\(SRCROOT)/build/Debug", "-I", "/tmp/include", "-I", "/tmp/system/include", "-F", "\(SRCROOT)/build/Debug", "-c", "-j\(compilerParallelismLevel)", "-incremental", "-output-file-map", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-OutputFileMap.json", "-emit-dependencies", "-emit-module", "-emit-module-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.swiftmodule", "-serialize-diagnostics", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-generated-files.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-own-target-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-all-target-headers.hmap", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-project-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/Debug/include", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources-normal/\(results.runDestinationTargetArchitecture)", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources", "-emit-objc-header", "-emit-objc-header-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-Swift.h", "-working-directory", SRCROOT])
+                        task.checkCommandLineContains([swiftCompilerPath.str, "-module-name", "AppTarget", "-O", "@\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.SwiftFileList", "-sdk", core.loadSDK(.macOS).path.str, "-target", "\(results.runDestinationTargetArchitecture)-apple-macos\(MACOSX_DEPLOYMENT_TARGET)", /* options from the xcspec which sometimes change appear here */ "-swift-version", swiftVersion, "-I", "\(SRCROOT)/build/Debug", "-I", "/tmp/include", "-I", "/tmp/system/include", "-F", "\(SRCROOT)/build/Debug", "-c", "-j\(compilerParallelismLevel)", "-incremental", "-output-file-map", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-OutputFileMap.json", "-emit-module", "-emit-module-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.swiftmodule", "-serialize-diagnostics", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-generated-files.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-own-target-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-all-target-headers.hmap", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-project-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/Debug/include", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources-normal/\(results.runDestinationTargetArchitecture)", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources", "-emit-objc-header", "-emit-objc-header-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-Swift.h", "-working-directory", SRCROOT])
                     }
 
                     task.checkInputs([
@@ -267,9 +267,9 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
                 results.checkTask(.matchTarget(target), .matchRuleType("SwiftDriver Compilation Requirements")) { task in
                     task.checkRuleInfo(["SwiftDriver Compilation Requirements", target.target.name, "normal", results.runDestinationTargetArchitecture, "com.apple.xcode.tools.swift.compiler"])
                     if LibSwiftDriver.supportsDriverFlag(spelled: "-Isystem") && swiftFeatures.has(.Isystem) {
-                        task.checkCommandLineContains([swiftCompilerPath.str, "-module-name", "AppTarget", "-O", "@\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.SwiftFileList", "-sdk", core.loadSDK(.macOS).path.str, "-target", "\(results.runDestinationTargetArchitecture)-apple-macos\(MACOSX_DEPLOYMENT_TARGET)", /* options from the xcspec which sometimes change appear here */ "-swift-version", swiftVersion, "-I", "\(SRCROOT)/build/Debug", "-I", "/tmp/include", "-Isystem", "/tmp/system/include", "-F", "\(SRCROOT)/build/Debug", "-c", "-j\(compilerParallelismLevel)", "-incremental", "-output-file-map", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-OutputFileMap.json", "-emit-dependencies", "-emit-module", "-emit-module-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.swiftmodule", "-serialize-diagnostics", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-generated-files.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-own-target-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-all-target-headers.hmap", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-project-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/Debug/include", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources-normal/\(results.runDestinationTargetArchitecture)", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources", "-emit-objc-header", "-emit-objc-header-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-Swift.h", "-working-directory", SRCROOT])
+                        task.checkCommandLineContains([swiftCompilerPath.str, "-module-name", "AppTarget", "-O", "@\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.SwiftFileList", "-sdk", core.loadSDK(.macOS).path.str, "-target", "\(results.runDestinationTargetArchitecture)-apple-macos\(MACOSX_DEPLOYMENT_TARGET)", /* options from the xcspec which sometimes change appear here */ "-swift-version", swiftVersion, "-I", "\(SRCROOT)/build/Debug", "-I", "/tmp/include", "-Isystem", "/tmp/system/include", "-F", "\(SRCROOT)/build/Debug", "-c", "-j\(compilerParallelismLevel)", "-incremental", "-output-file-map", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-OutputFileMap.json", "-emit-module", "-emit-module-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.swiftmodule", "-serialize-diagnostics", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-generated-files.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-own-target-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-all-target-headers.hmap", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-project-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/Debug/include", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources-normal/\(results.runDestinationTargetArchitecture)", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources", "-emit-objc-header", "-emit-objc-header-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-Swift.h", "-working-directory", SRCROOT])
                     } else {
-                        task.checkCommandLineContains([swiftCompilerPath.str, "-module-name", "AppTarget", "-O", "@\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.SwiftFileList", "-sdk", core.loadSDK(.macOS).path.str, "-target", "\(results.runDestinationTargetArchitecture)-apple-macos\(MACOSX_DEPLOYMENT_TARGET)", /* options from the xcspec which sometimes change appear here */ "-swift-version", swiftVersion, "-I", "\(SRCROOT)/build/Debug", "-I", "/tmp/include", "-I", "/tmp/system/include", "-F", "\(SRCROOT)/build/Debug", "-c", "-j\(compilerParallelismLevel)", "-incremental", "-output-file-map", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-OutputFileMap.json", "-emit-dependencies", "-emit-module", "-emit-module-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.swiftmodule", "-serialize-diagnostics", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-generated-files.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-own-target-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-all-target-headers.hmap", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-project-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/Debug/include", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources-normal/\(results.runDestinationTargetArchitecture)", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources", "-emit-objc-header", "-emit-objc-header-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-Swift.h", "-working-directory", SRCROOT])
+                        task.checkCommandLineContains([swiftCompilerPath.str, "-module-name", "AppTarget", "-O", "@\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.SwiftFileList", "-sdk", core.loadSDK(.macOS).path.str, "-target", "\(results.runDestinationTargetArchitecture)-apple-macos\(MACOSX_DEPLOYMENT_TARGET)", /* options from the xcspec which sometimes change appear here */ "-swift-version", swiftVersion, "-I", "\(SRCROOT)/build/Debug", "-I", "/tmp/include", "-I", "/tmp/system/include", "-F", "\(SRCROOT)/build/Debug", "-c", "-j\(compilerParallelismLevel)", "-incremental", "-output-file-map", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-OutputFileMap.json", "-emit-module", "-emit-module-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget.swiftmodule", "-serialize-diagnostics", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-generated-files.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-own-target-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-all-target-headers.hmap", "-Xcc", "-iquote", "-Xcc", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/AppTarget-project-headers.hmap", "-Xcc", "-I\(SRCROOT)/build/Debug/include", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources-normal/\(results.runDestinationTargetArchitecture)", "-Xcc", "-I\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/DerivedSources", "-emit-objc-header", "-emit-objc-header-path", "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-Swift.h", "-working-directory", SRCROOT])
                     }
 
                     task.checkInputs([
@@ -343,7 +343,6 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
                             "swift-dependencies": .plString("\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-primary.swiftdeps"),
                             "diagnostics": .plString("\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-primary.dia"),
                             "emit-module-diagnostics": .plString("\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-primary-emit-module.dia"),
-                            "emit-module-dependencies": .plString("\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-primary-emit-module.d"),
                             "pch": .plString("\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/AppTarget-primary-Bridging-header.pch"),
                         ]))
                     }
@@ -361,16 +360,17 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
                         if let fileDict = dict[filepath]?.dictValue {
                             #expect(fileDict["object"]?.stringValue == "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/\(filename).o")
                             #expect(fileDict["diagnostics"]?.stringValue == "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/\(filename).dia")
-                            #expect(fileDict["dependencies"]?.stringValue == "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/\(filename).d")
+                            // With explicit modules, the dependency scanner reports dependencies instead of make-style dependency files.
+                            #expect(fileDict["dependencies"] == nil)
                             #expect(fileDict["swift-dependencies"]?.stringValue == "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/\(filename).swiftdeps")
                             #expect(fileDict["swiftmodule"]?.stringValue == "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/\(filename)~partial.swiftmodule")
                             #expect(fileDict["llvm-bc"]?.stringValue == "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/\(filename).bc")
                             #expect(fileDict["const-values"]?.stringValue == "\(SRCROOT)/build/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/\(filename).swiftconstvalues")
                             if swiftFeatures.has(.indexUnitOutputPathWithoutWarning) {
                                 #expect(fileDict["index-unit-output-path"]?.stringValue == "/aProject.build/Debug/AppTarget.build/Objects-normal/\(results.runDestinationTargetArchitecture)/\(filename).o")
-                                #expect(fileDict.count == 8)
+                                #expect(fileDict.count == 7)
                             } else {
-                                #expect(fileDict.count == 6)
+                                #expect(fileDict.count == 5)
                             }
                         }
                         else {
@@ -737,7 +737,6 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
                         "-output-file-map", "/tmp/Test/aProject/build/aProject.build/Debug/CoreFoo.build/Objects-normal/\(results.runDestinationTargetArchitecture)/CoreFoo-OutputFileMap.json",
                         .anySequence,
                         // Configure the output.
-                        "-emit-dependencies",
                         // The module emission arguments.
                         "-emit-module", "-emit-module-path", "/tmp/Test/aProject/build/aProject.build/Debug/CoreFoo.build/Objects-normal/\(results.runDestinationTargetArchitecture)/CoreFoo.swiftmodule",
                         "-serialize-diagnostics", "-dependency-scan-serialize-diagnostics-path", "/tmp/Test/aProject/build/aProject.build/Debug/CoreFoo.build/Objects-normal/\(results.runDestinationTargetArchitecture)/CoreFoo-dependency-scan.dia",
@@ -794,7 +793,6 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
                         "-output-file-map", "/tmp/Test/aProject/build/aProject.build/Debug/CoreFoo.build/Objects-normal/\(results.runDestinationTargetArchitecture)/CoreFoo-OutputFileMap.json",
                         .anySequence,
                         // Configure the output.
-                        "-emit-dependencies",
                         // The module emission arguments.
                         "-emit-module", "-emit-module-path", "/tmp/Test/aProject/build/aProject.build/Debug/CoreFoo.build/Objects-normal/\(results.runDestinationTargetArchitecture)/CoreFoo.swiftmodule",
                         "-serialize-diagnostics", "-dependency-scan-serialize-diagnostics-path", "/tmp/Test/aProject/build/aProject.build/Debug/CoreFoo.build/Objects-normal/\(results.runDestinationTargetArchitecture)/CoreFoo-dependency-scan.dia",
@@ -863,6 +861,54 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
     /// Check the behavior of the Swift compiler, from task construction purposes.
     ///
     /// Command line specific checks should typically be tested via the Core Spec tests, instead of here, unless the important pieces are the interactions between tasks.
+    /// With explicit modules, the dependency scanner reports a module's dependencies, so no make-style dependency files are emitted unless requested; they would repeat every source of the module and every header it imports for every file.
+    @Test(.requireSDKs(.macOS), arguments: [
+        (explicitModules: "YES", registrationMode: nil, makeStyle: false),
+        (explicitModules: "YES", registrationMode: "dependency-scanner", makeStyle: false),
+        (explicitModules: "YES", registrationMode: "make-style", makeStyle: true),
+        (explicitModules: "YES", registrationMode: "verify-swift-dependency-scanner", makeStyle: true),
+        (explicitModules: "NO", registrationMode: nil, makeStyle: true),
+    ])
+    func swiftDependencyRegistrationMode(explicitModules: String, registrationMode: String?, makeStyle: Bool) async throws {
+        var buildSettings = [
+            "CODE_SIGN_IDENTITY": "",
+            "PRODUCT_NAME": "$(TARGET_NAME)",
+            "SWIFT_EXEC": try await swiftCompilerPath.str,
+            "SWIFT_VERSION": try await swiftVersion,
+            "SWIFT_ENABLE_EXPLICIT_MODULES": explicitModules,
+        ]
+        buildSettings["SWIFT_DEPENDENCY_REGISTRATION_MODE"] = registrationMode
+        let testProject = TestProject(
+            "aProject",
+            groupTree: TestGroup("SomeFiles", path: "Sources", children: [TestFile("A.swift"), TestFile("B.swift")]),
+            buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: buildSettings)],
+            targets: [
+                TestStandardTarget("Lib", type: .framework, buildPhases: [TestSourcesBuildPhase(["A.swift", "B.swift"])]),
+            ])
+        let tester = try await TaskConstructionTester(getCore(), testProject)
+
+        await tester.checkBuild(runDestination: .macOS) { results in
+            results.checkNoDiagnostics()
+            let objectsDir = "\(tester.workspace.projects[0].sourceRoot.str)/build/aProject.build/Debug/Lib.build/Objects-normal/\(results.runDestinationTargetArchitecture)"
+            results.checkTask(.matchRuleType("SwiftDriver Compilation Requirements")) { task in
+                if makeStyle {
+                    task.checkCommandLineContains(["-emit-dependencies"])
+                    #expect(task.dependencyData != nil)
+                } else {
+                    task.checkCommandLineDoesNotContain("-emit-dependencies")
+                    #expect(task.dependencyData == nil)
+                }
+            }
+            results.checkWriteAuxiliaryFileTask(.matchRule(["WriteAuxiliaryFile", "\(objectsDir)/Lib-OutputFileMap.json"])) { _, contents in
+                let outputFileMap = try? PropertyList.fromJSONData(contents).dictValue
+                for (input, outputs) in outputFileMap ?? [:] {
+                    let key = input.isEmpty ? "emit-module-dependencies" : "dependencies"
+                    #expect((outputs.dictValue?[key] != nil) == makeStyle, "unexpected '\(key)' entry for '\(input)'")
+                }
+            }
+        }
+    }
+
     @Test(.requireSDKs(.macOS))
     func swiftCompiler() async throws {
         let swiftCompilerPath = try await self.swiftCompilerPath
@@ -949,7 +995,6 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
                         .anySequence,
 
                         // Configure the output.
-                        "-emit-dependencies",
 
                         // The module emission arguments.
                         "-emit-module", "-emit-module-path", "/tmp/Test/aProject/build/aProject.build/Debug/CoreFoo.build/Objects-normal/\(results.runDestinationTargetArchitecture)/CoreFoo.swiftmodule",
@@ -1032,7 +1077,6 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
                         .anySequence,
 
                         // Configure the output.
-                        "-emit-dependencies",
 
                         // The module emission arguments.
                         "-emit-module", "-emit-module-path", "/tmp/Test/aProject/build/aProject.build/Debug/CoreFoo.build/Objects-normal/\(results.runDestinationTargetArchitecture)/CoreFoo.swiftmodule",
