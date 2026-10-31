@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Foundation
 import Testing
 
 import SWBCore
@@ -444,6 +445,64 @@ fileprivate struct SwiftBuildOperationTests: CoreBasedTests {
             for dylib in legitimateDylibs {
                 #expect(tester.fs.exists(frameworksDir.join(dylib)), "Legitimate stdlib dylib \(dylib) should not have been removed")
             }
+        }
+    }
+
+    /// Installing a module whose contents didn't change, for example when switching between a package target's static and dynamic variants, keeps the installed file, so that its importers don't re-plan.
+    @Test(.requireSDKs(.macOS))
+    func installedModuleNotRewrittenWhenUnchanged() async throws {
+        try await withTemporaryDirectory { tmpDirPath async throws -> Void in
+            let testWorkspace = TestWorkspace(
+                "Test",
+                sourceRoot: tmpDirPath.join("Test"),
+                projects: [
+                    TestProject(
+                        "aProject",
+                        groupTree: TestGroup("Sources", children: [TestFile("Lib.swift")]),
+                        buildConfigurations: [
+                            TestBuildConfiguration(
+                                "Debug",
+                                buildSettings: [
+                                    "PRODUCT_NAME": "$(TARGET_NAME)",
+                                    "SWIFT_VERSION": try await swiftVersion,
+                                    "CODE_SIGNING_ALLOWED": "NO",
+                                ]),
+                        ],
+                        targets: [
+                            TestStandardTarget(
+                                "Lib",
+                                type: .staticLibrary,
+                                buildPhases: [TestSourcesBuildPhase(["Lib.swift"])])
+                        ])
+                ])
+            let tester = try await BuildOperationTester(getCore(), testWorkspace, simulated: false)
+            try await tester.fs.writeFileContents(tmpDirPath.join("Test/aProject/Lib.swift")) {
+                $0 <<< "public func lib() {}\n"
+            }
+
+            var arch = ""
+            try await tester.checkBuild(runDestination: .macOS, persistent: true) { results in
+                results.checkNoErrors()
+                arch = try results.runDestinationTargetArchitecture
+            }
+
+            let intermediateModule = tmpDirPath.join("Test/aProject/build/aProject.build/Debug/Lib.build/Objects-normal/\(arch)/Lib.swiftmodule")
+            let installedModule = tmpDirPath.join("Test/aProject/build/Debug/Lib.swiftmodule/\(arch)-apple-macos.swiftmodule")
+            let installedBefore = try tester.fs.getFileInfo(installedModule)
+
+            // Rewrite the module with the same contents, as another variant of the target would.
+            let contents = try tester.fs.read(intermediateModule)
+            try tester.fs.remove(intermediateModule)
+            try tester.fs.write(intermediateModule, contents: contents)
+
+            try await tester.checkBuild(runDestination: .macOS, persistent: true) { results in
+                results.checkNoErrors()
+                results.checkTaskExists(.matchRuleType("Copy"), .matchRuleItem(installedModule.str))
+            }
+
+            let installedAfter = try tester.fs.getFileInfo(installedModule)
+            // The driver re-plans importers of a module whose modification time changed.
+            #expect(installedAfter.modificationDate == installedBefore.modificationDate)
         }
     }
 

@@ -2381,7 +2381,8 @@ public final class SwiftCompilerSpec : CompilerSpec, SpecIdentifierType, SwiftDi
 
                     let outputFileName = compilationMode.destinationModuleFileName(triple) + inputFileSuffix
                     let outputPath = swiftModuleContentPath(cbc, moduleName: moduleName, fileName: outputFileName, isProject: isProject)
-                    await cbc.producer.copySpec.constructCopyTasks(CommandBuildContext(producer: cbc.producer, scope: cbc.scope, inputs: [FileToBuild(absolutePath: input, inferringTypeUsing: cbc.producer)], output: outputPath, preparesForIndexing: true), delegate, additionalTaskOrderingOptions: additionalTaskOrderingOptions)
+                    // Don't rewrite an installed file whose contents didn't change, e.g. when another variant of the target installs the same module: the driver re-plans every importer of a module whose modification time changed.
+                    await cbc.producer.copySpec.constructCopyTasks(CommandBuildContext(producer: cbc.producer, scope: cbc.scope, inputs: [FileToBuild(absolutePath: input, inferringTypeUsing: cbc.producer)], output: outputPath, preparesForIndexing: true), delegate, skipCopyIfContentsEqual: true, additionalTaskOrderingOptions: additionalTaskOrderingOptions)
                 }
 
                 let orderingOptions: TaskOrderingOptions = [.compilationRequirement, .blockedByTargetHeaders]
