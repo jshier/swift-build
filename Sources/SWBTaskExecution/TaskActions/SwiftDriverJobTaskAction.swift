@@ -663,8 +663,15 @@ public final class SwiftDriverJobTaskAction: TaskAction, BuildValueValidatingTas
                     return .failure(error)
                 }
             }
-            for replayResult in replayResults {
-                let result = try replayResult.get()
+            let results: [SwiftCacheReplayResult]
+            do {
+                results = try replayResults.map { try $0.get() }
+            } catch {
+                // The outputs weren't all written, so compile instead.
+                outputDelegate.warning("Compilation cache replay failed, compiling instead: \(error)")
+                return false
+            }
+            for result in results {
                 // emit stdout/stderr
                 outputDelegate.emitOutput(ByteString(encodingAsUTF8: try result.getStdOut()))
                 outputDelegate.emitOutput(ByteString(encodingAsUTF8: try result.getStdErr()))
