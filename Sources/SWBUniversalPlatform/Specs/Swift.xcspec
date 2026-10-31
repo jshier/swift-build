@@ -1521,6 +1521,11 @@
                 Type = Boolean;
                 DefaultValue = "$(SWIFT_ENABLE_CAS_SANDBOX)";
             },
+            {
+                Name = "SWIFT_IGNORE_DERIVED_SOURCES_SEARCH_PATHS_FOR_MODULES";
+                Type = Boolean;
+                DefaultValue = YES;
+            },
 
             // Swift caching options.
             {

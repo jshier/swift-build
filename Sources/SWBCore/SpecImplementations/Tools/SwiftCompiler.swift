@@ -697,6 +697,7 @@ public struct DiscoveredSwiftCompilerToolSpecInfo: DiscoveredCommandLineToolSpec
         case Isystem = "Isystem"
         case apiDigesterXcc = "api-digester-Xcc"
         case debugInfoExplicitDependency = "debug-info-explicit-dependency"
+        case clangModulesIgnoreSearchPath = "clang-modules-ignore-search-path"
     }
     public var toolFeatures: ToolFeatures<FeatureFlag>
     public func hasFeature(_ flag: String) -> Bool {
@@ -1930,6 +1931,15 @@ public final class SwiftCompilerSpec : CompilerSpec, SpecIdentifierType, SwiftDi
 
             } else {
                 importsUnderlyingModule = false
+            }
+
+            // Per-target directories for generated headers are only needed by the target's own code, so ignore them for Clang modules, which would otherwise be built separately for every target (in particular by the dependency scanner). The target's own underlying module may include generated headers, so keep them for it.
+            if !importsUnderlyingModule,
+               cbc.scope.evaluate(BuiltinMacros.SWIFT_IGNORE_DERIVED_SOURCES_SEARCH_PATHS_FOR_MODULES),
+               toolSpecInfo.toolFeatures.has(.clangModulesIgnoreSearchPath) {
+                for path in headerSearchPaths.derivedFileSearchPaths {
+                    args.append(contentsOf: ["-Xcc", "-fmodules-ignore-search-path=" + path.str])
+                }
             }
 
             // Add the working directory.

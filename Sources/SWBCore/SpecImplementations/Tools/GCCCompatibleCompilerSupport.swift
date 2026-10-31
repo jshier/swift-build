@@ -110,6 +110,18 @@ package final class SearchPathBuilder
         addSearchPathEntry(.headerSearchPath(path: normalizedPath, asSeparateArguments: asSeparateArguments), normalizedPath, isInputPath)
     }
 
+    /// The header search paths added for the directories where derived files may be generated, as they are passed to the compiler.
+    private(set) var derivedFileSearchPaths: [Path] = []
+
+    /// Add a header search path for a directory where derived files may be generated.
+    func addDerivedFileHeaderSearchPath(_ path: Path)
+    {
+        let normalizedPath = path.normalize()
+        guard !normalizedPath.isEmpty else { return }
+        addHeaderSearchPath(normalizedPath)
+        derivedFileSearchPaths.append(normalizedPath)
+    }
+
     /// Add a system header search path to the list of search paths.  The path will not be added if an ordinary or system header search path for the path has previously been added.
     func addSystemHeaderSearchPath(_ path: Path, isInputPath: Bool = false)
     {
@@ -151,13 +163,14 @@ package final class SearchPathBuilder
     }
 
     var searchPaths: SearchPaths {
-        SearchPaths(searchPathEntries: searchPathEntries, inputPaths: inputPaths, headerSearchPaths: headerSearchPaths, systemHeaderSearchPaths: systemHeaderSearchPaths, frameworkSearchPaths: frameworkSearchPaths, systemFrameworkSearchPaths: systemFrameworkSearchPaths)
+        SearchPaths(searchPathEntries: searchPathEntries, inputPaths: inputPaths, headerSearchPaths: headerSearchPaths, systemHeaderSearchPaths: systemHeaderSearchPaths, frameworkSearchPaths: frameworkSearchPaths, systemFrameworkSearchPaths: systemFrameworkSearchPaths, derivedFileSearchPaths: derivedFileSearchPaths)
     }
 }
 
 package struct SearchPaths: Sendable {
-    init(searchPathEntries: [SearchPathEntry], inputPaths: OrderedSet<Path>, headerSearchPaths: Set<Path>, systemHeaderSearchPaths: Set<Path> = Set<Path>(), frameworkSearchPaths: Set<Path>, systemFrameworkSearchPaths: Set<Path> = Set<Path>()) {
+    init(searchPathEntries: [SearchPathEntry], inputPaths: OrderedSet<Path>, headerSearchPaths: Set<Path>, systemHeaderSearchPaths: Set<Path> = Set<Path>(), frameworkSearchPaths: Set<Path>, systemFrameworkSearchPaths: Set<Path> = Set<Path>(), derivedFileSearchPaths: [Path] = []) {
         self.searchPathEntries = searchPathEntries
+        self.derivedFileSearchPaths = derivedFileSearchPaths
         self.inputPaths = inputPaths
         self.headerSearchPaths = headerSearchPaths
         self.systemHeaderSearchPaths = systemHeaderSearchPaths
@@ -182,6 +195,9 @@ package struct SearchPaths: Sendable {
 
     /// The set of system framework search paths already added.
     package let systemFrameworkSearchPaths: Set<Path>
+
+    /// The header search paths for the directories where derived files may be generated, as they are passed to the compiler.
+    package let derivedFileSearchPaths: [Path]
 
     /// Generate the command line arguments for search path entries for the given command line builder.
     package func searchPathArguments(for builder: any SearchPathCommandLineBuilder, scope: MacroEvaluationScope) -> [String] {
@@ -317,13 +333,13 @@ package struct GCCCompatibleCompilerSpecSupport
             let currentSlice = scope.evaluate(BuiltinMacros.CURRENT_SLICE_UNVERSIONED)
             let variantPath = Path("\(derivedFileDir.str)-\(scope.evaluate(BuiltinMacros.CURRENT_VARIANT))")
             if !currentSlice.hasPrefix("undefined_arch") {
-                searchPathBuilder.addHeaderSearchPath(variantPath.join(currentSlice))
-                searchPathBuilder.addHeaderSearchPath(derivedFileDir.join(currentSlice))
+                searchPathBuilder.addDerivedFileHeaderSearchPath(variantPath.join(currentSlice))
+                searchPathBuilder.addDerivedFileHeaderSearchPath(derivedFileDir.join(currentSlice))
             } else {
-                searchPathBuilder.addHeaderSearchPath(variantPath)
+                searchPathBuilder.addDerivedFileHeaderSearchPath(variantPath)
             }
 
-            searchPathBuilder.addHeaderSearchPath(derivedFileDir)
+            searchPathBuilder.addDerivedFileHeaderSearchPath(derivedFileDir)
         }
 
         // If there are Iig generated files in this target, add them to the search path.

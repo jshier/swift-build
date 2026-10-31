@@ -2894,6 +2894,62 @@ fileprivate struct SwiftTaskConstructionTests: CoreBasedTests {
         }
     }
 
+    /// Per-target directories for generated headers are ignored for Clang modules when the compiler supports it, so that they don't make every target build its own Clang modules.
+    @Test(.requireSDKs(.macOS), arguments: [
+        (compilerSupportsIt: true, setting: nil, hasClangModule: false, ignored: true),
+        (compilerSupportsIt: true, setting: "NO", hasClangModule: false, ignored: false),
+        (compilerSupportsIt: false, setting: nil, hasClangModule: false, ignored: false),
+        // The target's own Clang module may include generated headers.
+        (compilerSupportsIt: true, setting: nil, hasClangModule: true, ignored: false),
+    ])
+    func derivedSourcesSearchPathsIgnoredForModules(compilerSupportsIt: Bool, setting: String?, hasClangModule: Bool, ignored: Bool) async throws {
+        try await withTemporaryDirectory { tmpDir in
+            // A toolchain whose features.json declares whether the compiler supports `-fmodules-ignore-search-path=`.
+            let realSwiftc = try await swiftCompilerPath
+            var features = try PropertyList.fromJSONData(localFS.read(realSwiftc.dirname.dirname.join("share/swift/features.json"))).dictValue ?? [:]
+            var featureList = (features["features"]?.arrayValue ?? []).filter { $0.dictValue?["name"]?.stringValue != "clang-modules-ignore-search-path" }
+            if compilerSupportsIt {
+                featureList.append(.plDict(["name": .plString("clang-modules-ignore-search-path")]))
+            }
+            features["features"] = .plArray(featureList)
+            let swiftc = tmpDir.join("usr/bin/swiftc")
+            try localFS.createDirectory(swiftc.dirname, recursive: true)
+            try localFS.symlink(swiftc, target: realSwiftc)
+            try localFS.createDirectory(tmpDir.join("usr/share/swift"), recursive: true)
+            try localFS.write(tmpDir.join("usr/share/swift/features.json"), contents: ByteString(PropertyListItem.plDict(features).asJSONFragment()))
+
+            var buildSettings = [
+                "CODE_SIGN_IDENTITY": "",
+                "PRODUCT_NAME": "$(TARGET_NAME)",
+                "SWIFT_EXEC": swiftc.str,
+                "SWIFT_VERSION": try await swiftVersion,
+                "DEFINES_MODULE": "YES",
+            ]
+            buildSettings["SWIFT_IGNORE_DERIVED_SOURCES_SEARCH_PATHS_FOR_MODULES"] = setting
+            let testProject = TestProject(
+                "aProject",
+                groupTree: TestGroup("SomeFiles", path: "Sources", children: [TestFile("bar.swift"), TestFile("FwkTarget.h")]),
+                buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: buildSettings)],
+                targets: [
+                    TestStandardTarget(
+                        "FwkTarget", type: .framework,
+                        buildPhases: [TestSourcesBuildPhase(["bar.swift"])] + (hasClangModule ? [TestHeadersBuildPhase([TestBuildFile("FwkTarget.h", headerVisibility: .public)])] : [])),
+                ])
+            let tester = try await TaskConstructionTester(getCore(), testProject)
+
+            await tester.checkBuild(runDestination: .macOS, fs: PseudoFS()) { results in
+                results.checkTask(.matchRuleType("SwiftDriver Compilation")) { task in
+                    let commandLine = task.commandLineAsStrings.map { $0 }
+                    let derivedSourcesPaths = commandLine.filter { $0.hasPrefix("-I") && $0.contains("/DerivedSources") }.map { String($0.dropFirst(2)) }
+                    let ignoredPaths = commandLine.filter { $0.hasPrefix("-fmodules-ignore-search-path=") }.map { String($0.dropFirst("-fmodules-ignore-search-path=".count)) }
+                    #expect(!derivedSourcesPaths.isEmpty)
+                    #expect(ignoredPaths == (ignored ? derivedSourcesPaths : []))
+                }
+                results.checkNoErrors()
+            }
+        }
+    }
+
     @Test(.requireSDKs(.macOS))
     func swiftEnableDefaultSearchPathsInHeaderSearchPaths() async throws {
         let testProject = try await TestProject(
