@@ -32,7 +32,7 @@ public final class FileCopyTaskAction: TaskAction
 
     // Temporary workaround for the App Store
     public override func serialize<T: Serializer>(to serializer: T) {
-        serializer.beginAggregate(11)
+        serializer.beginAggregate(12)
         serializer.serialize(context.skipAppStoreDeployment)
         serializer.serialize(context.stubPartialCompilerCommandLine)
         serializer.serialize(context.stubPartialLinkerCommandLine)
@@ -43,13 +43,14 @@ public final class FileCopyTaskAction: TaskAction
         serializer.serialize(context.platformName)
         serializer.serialize(context.swiftPlatformTargetPrefix)
         serializer.serialize(context.isMacCatalyst)
+        serializer.serialize(context.discoveredDirectoryTreeInputs)
         super.serialize(to: serializer)
         serializer.endAggregate()
     }
 
     // Temporary workaround for the App Store
     public required init(from deserializer: any Deserializer) throws {
-        try deserializer.beginAggregate(11)
+        try deserializer.beginAggregate(12)
         self.context = try .init(
             skipAppStoreDeployment: deserializer.deserialize(),
             stubPartialCompilerCommandLine: deserializer.deserialize(),
@@ -60,7 +61,8 @@ public final class FileCopyTaskAction: TaskAction
             llvmTargetTripleSuffix: deserializer.deserialize(),
             platformName: deserializer.deserialize(),
             swiftPlatformTargetPrefix: deserializer.deserialize(),
-            isMacCatalyst: deserializer.deserialize()
+            isMacCatalyst: deserializer.deserialize(),
+            discoveredDirectoryTreeInputs: deserializer.deserialize()
         )
         try super.init(from: deserializer)
     }
@@ -84,6 +86,10 @@ public final class FileCopyTaskAction: TaskAction
                     dynamicExecutionDelegate.discoveredDependencyDirectoryTree(symlinkDestinationPath)
                 }
             }
+        }
+        // Discovered dependencies are scanned after the task runs, so their signature reflects the input once every task that writes into it has finished.
+        for inputPath in context.discoveredDirectoryTreeInputs where executionDelegate.fs.exists(inputPath) {
+            dynamicExecutionDelegate.discoveredDependencyDirectoryTree(inputPath)
         }
         let result = await pbxcp(Array(task.commandLineAsStrings), cwd: task.workingDirectory)
 

@@ -36,7 +36,8 @@ public final class CopyToolSpec : CompilerSpec, SpecIdentifierType, @unchecked S
         additionalPresumedOutputs: [any PlannedNode] = [],
         ignoreMissingInputs: Bool = false,
         additionalTaskOrderingOptions: TaskOrderingOptions = [],
-        repairViaOwnershipAnalysis: Bool = false
+        repairViaOwnershipAnalysis: Bool = false,
+        discoverInputDirectoryTrees: Bool = false
     ) async {
         let input = cbc.input
         let inputPath = input.absolutePath
@@ -159,8 +160,10 @@ public final class CopyToolSpec : CompilerSpec, SpecIdentifierType, @unchecked S
         assert(inputPath.str == ruleInfo[payload.inputIndexInRuleInfo])
 
         // Note that the order of rule info here is against the usual conventions.
-        let action = await delegate.taskActionCreationDelegate.createFileCopyTaskAction(FileCopyTaskActionContext(cbc, delegate: delegate))
-        let inputs: [any PlannedNode] = cbc.inputs.map{ delegate.createDirectoryTreeNode($0.absolutePath) } + cbc.commandOrderingInputs
+        // When discovering input directory trees, the inputs aren't declared, and the copy action reports their directory trees as discovered dependencies instead. llbuild only computes those after the copy runs, so the recorded signature includes changes made to the input by other tasks before the copy, rather than a listing taken as soon as the directory was created. The caller must order the copy after the tasks producing the inputs some other way, e.g. by them being another target's product.
+        let discoveredDirectoryTreeInputs = discoverInputDirectoryTrees ? cbc.inputs.map(\.absolutePath) : []
+        let action = await delegate.taskActionCreationDelegate.createFileCopyTaskAction(FileCopyTaskActionContext(cbc, delegate: delegate, discoveredDirectoryTreeInputs: discoveredDirectoryTreeInputs))
+        let inputs: [any PlannedNode] = (discoverInputDirectoryTrees ? [] : cbc.inputs.map{ delegate.createDirectoryTreeNode($0.absolutePath) }) + cbc.commandOrderingInputs
         let outputs: [any PlannedNode] = [delegate.createNode(outputPath)] + additionalPresumedOutputs + cbc.commandOrderingOutputs
         delegate.createTask(
             type: self, payload: payload, ruleInfo: ruleInfo,

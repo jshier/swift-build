@@ -766,6 +766,66 @@ fileprivate struct PackageBuildOperationTests: CoreBasedTests {
         }
     }
 
+    /// The bundle's own target fills and signs it in place after creating it, so the embedding copy must not record its contents before that target finished, or the next build copies it again.
+    @Test(.requireSDKs(.macOS))
+    func packageResourceBundleEmbeddingNullBuildAfterCleanBuild() async throws {
+        try await withTemporaryDirectory { tmpDirPath async throws -> Void in
+            let testWorkspace = TestWorkspace(
+                "Test",
+                sourceRoot: tmpDirPath.join("Test"),
+                projects: [
+                    TestProject(
+                        "aProject",
+                        groupTree: TestGroup("Sources", children: [
+                            TestFile("main.c"),
+                            TestFile("greeting.txt"),
+                        ]),
+                        buildConfigurations: [TestBuildConfiguration(
+                            "Debug",
+                            buildSettings: [
+                                "PRODUCT_NAME": "$(TARGET_NAME)",
+                                "GENERATE_INFOPLIST_FILE": "YES",
+                                "CODE_SIGN_IDENTITY": "-",
+                            ])],
+                        targets: [
+                            TestStandardTarget(
+                                "App", type: .application,
+                                buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: [
+                                    "EMBED_PACKAGE_RESOURCE_BUNDLE_NAMES": "Res_Res",
+                                ])],
+                                buildPhases: [TestSourcesBuildPhase(["main.c"])],
+                                dependencies: ["Res_Res"]),
+                            TestStandardTarget(
+                                "Res_Res", type: .bundle,
+                                buildPhases: [TestResourcesBuildPhase(["greeting.txt"])]),
+                        ])])
+            let tester = try await BuildOperationTester(getCore(), testWorkspace, simulated: false, fileSystem: localFS)
+            let SRCROOT = testWorkspace.sourceRoot.join("aProject")
+            let signableTargets: Set<String> = ["App", "Res_Res"]
+            let copiedGreeting = SRCROOT.join("build/Debug/App.app/Contents/Resources/Res_Res.bundle/Contents/Resources/greeting.txt")
+
+            try await tester.fs.writeFileContents(SRCROOT.join("main.c")) { $0 <<< "int main(void) { return 0; }\n" }
+            try await tester.fs.writeFileContents(SRCROOT.join("greeting.txt")) { $0 <<< "hello\n" }
+
+            try await tester.checkBuild(runDestination: .macOS, persistent: true, signableTargets: signableTargets) { results in
+                results.checkTaskExists(.matchTargetName("Res_Res"), .matchRuleType("CodeSign"))
+                results.checkTaskExists(.matchTargetName("App"), .matchRuleType("Copy"), .matchRuleItemBasename("Res_Res.bundle"))
+                results.checkNoDiagnostics()
+            }
+
+            try await tester.checkNullBuild(runDestination: .macOS, persistent: true, signableTargets: signableTargets)
+
+            // Editing a resource must still copy the bundle again.
+            try await tester.fs.writeFileContents(SRCROOT.join("greeting.txt"), waitForNewTimestamp: true) { $0 <<< "goodbye\n" }
+            try await tester.checkBuild(runDestination: .macOS, persistent: true, signableTargets: signableTargets) { results in
+                results.checkTaskExists(.matchTargetName("App"), .matchRuleType("Copy"), .matchRuleItemBasename("Res_Res.bundle"))
+                results.checkNoDiagnostics()
+            }
+            #expect(try tester.fs.read(copiedGreeting).asString.contains("goodbye"))
+
+            try await tester.checkNullBuild(runDestination: .macOS, persistent: true, signableTargets: signableTargets)
+        }
+    }
 }
 
 extension PackageBuildOperationTests {

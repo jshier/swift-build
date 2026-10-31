@@ -1292,6 +1292,8 @@ fileprivate struct PackageProductConstructionTests: CoreBasedTests {
             results.checkTarget("app") { target in
                 results.checkTask(.matchTarget(target), .matchRuleType("Copy"), .matchRuleItemBasename("FOO.bundle")) { task in
                     task.checkCommandLineContains(["/tmp/Test/aProject/build/Debug/FOO.bundle", "/tmp/Test/aProject/build/Debug/app.app/Contents/Resources"])
+                    // The bundle isn't a declared input; the copy reports its directory tree as a discovered dependency when it runs.
+                    #expect(!task.inputs.contains { $0.path == Path("/tmp/Test/aProject/build/Debug/FOO.bundle") })
                 }
             }
             results.checkTarget("appex") { target in

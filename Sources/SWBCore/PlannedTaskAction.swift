@@ -179,8 +179,10 @@ public struct FileCopyTaskActionContext {
     public let platformName: String
     public let swiftPlatformTargetPrefix: String
     public let isMacCatalyst: Bool
+    /// Inputs whose directory tree is reported as a discovered dependency when the copy runs, instead of being declared as a directory tree input up front.
+    public let discoveredDirectoryTreeInputs: [Path]
 
-    public init(skipAppStoreDeployment: Bool, stubPartialCompilerCommandLine: [String], stubPartialLinkerCommandLine: [String], stubPartialLipoCommandLine: [String], partialTargetValues: [String], llvmTargetTripleOSVersion: String, llvmTargetTripleSuffix: String, platformName: String, swiftPlatformTargetPrefix: String, isMacCatalyst: Bool) {
+    public init(skipAppStoreDeployment: Bool, stubPartialCompilerCommandLine: [String], stubPartialLinkerCommandLine: [String], stubPartialLipoCommandLine: [String], partialTargetValues: [String], llvmTargetTripleOSVersion: String, llvmTargetTripleSuffix: String, platformName: String, swiftPlatformTargetPrefix: String, isMacCatalyst: Bool, discoveredDirectoryTreeInputs: [Path] = []) {
         self.skipAppStoreDeployment = skipAppStoreDeployment
         self.stubPartialCompilerCommandLine = stubPartialCompilerCommandLine
         self.stubPartialLinkerCommandLine = stubPartialLinkerCommandLine
@@ -191,6 +193,7 @@ public struct FileCopyTaskActionContext {
         self.platformName = platformName
         self.swiftPlatformTargetPrefix = swiftPlatformTargetPrefix
         self.isMacCatalyst = isMacCatalyst
+        self.discoveredDirectoryTreeInputs = discoveredDirectoryTreeInputs
     }
 
     private func minimumSystemVersionKey(for platformName: String) -> String {
@@ -266,7 +269,7 @@ public struct FileCopyTaskActionContext {
 }
 
 extension FileCopyTaskActionContext {
-    public init(_ cbc: CommandBuildContext, delegate: any CoreClientTargetDiagnosticProducingDelegate) async {
+    public init(_ cbc: CommandBuildContext, delegate: any CoreClientTargetDiagnosticProducingDelegate, discoveredDirectoryTreeInputs: [Path] = []) async {
         let compilerPath = cbc.producer.clangSpec.resolveExecutablePath(cbc, forLanguageOfFileType: cbc.producer.lookupFileType(languageDialect: .c))
         let linkerPath = await cbc.producer.ldLinkerSpec.resolveExecutablePath(cbc.producer, cbc.producer.ldLinkerSpec.computeLinkerPath(cbc, usedCXX: false, lookup: { macro in
             switch macro {
@@ -280,7 +283,7 @@ extension FileCopyTaskActionContext {
 
         // If we couldn't find clang, skip the special stub binary handling. We may be using an Open Source toolchain which only has Swift. Also skip it for installLoc builds.
         if compilerPath.isEmpty || !compilerPath.isAbsolute || cbc.scope.evaluate(BuiltinMacros.BUILD_COMPONENTS).contains("installLoc") {
-            self.init(skipAppStoreDeployment: true, stubPartialCompilerCommandLine: [], stubPartialLinkerCommandLine: [], stubPartialLipoCommandLine: [], partialTargetValues: [], llvmTargetTripleOSVersion: "", llvmTargetTripleSuffix: "", platformName: "", swiftPlatformTargetPrefix: "", isMacCatalyst: false)
+            self.init(skipAppStoreDeployment: true, stubPartialCompilerCommandLine: [], stubPartialLinkerCommandLine: [], stubPartialLipoCommandLine: [], partialTargetValues: [], llvmTargetTripleOSVersion: "", llvmTargetTripleSuffix: "", platformName: "", swiftPlatformTargetPrefix: "", isMacCatalyst: false, discoveredDirectoryTreeInputs: discoveredDirectoryTreeInputs)
             return
         }
 
@@ -311,7 +314,8 @@ extension FileCopyTaskActionContext {
             llvmTargetTripleSuffix: llvmTargetTripleSuffix,
             platformName: platformName,
             swiftPlatformTargetPrefix: swiftPlatformTargetPrefix,
-            isMacCatalyst: isMacCatalyst)
+            isMacCatalyst: isMacCatalyst,
+            discoveredDirectoryTreeInputs: discoveredDirectoryTreeInputs)
     }
 }
 

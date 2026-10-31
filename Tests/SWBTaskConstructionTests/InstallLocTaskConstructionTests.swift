@@ -2232,6 +2232,8 @@ fileprivate struct InstallLocTaskConstructionTests: CoreBasedTests {
             results.checkTarget("app") { target in
                 results.checkTask(.matchTarget(target), .matchRuleType("Copy"), .matchRuleItemBasename("FOO.bundle")) { task in
                     task.checkCommandLineContains(["-ignore-missing-inputs", "/tmp/Test/aProject/build/Debug/FOO.bundle", "/tmp/Test/aProject/build/UninstalledProducts/macosx/app.app/Contents/Resources"])
+                    // The bundle may be missing, so it stays a directory tree input rather than a path input llbuild would require.
+                    #expect(task.inputs.contains { $0 is PlannedDirectoryTreeNode && $0.path == Path("/tmp/Test/aProject/build/Debug/FOO.bundle") })
                 }
             }
             results.checkTarget("appex") { target in

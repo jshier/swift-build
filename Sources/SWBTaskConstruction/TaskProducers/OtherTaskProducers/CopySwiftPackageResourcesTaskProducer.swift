@@ -76,7 +76,8 @@ final class CopySwiftPackageResourcesTaskProducer: PhasedTaskProducer, TaskProdu
 
                 let ignoreMissingInputs = scope.evaluate(BuiltinMacros.BUILD_COMPONENTS).contains("installLoc")
                 let cbc = CommandBuildContext(producer: context, scope: scope, inputs: [FileToBuild(absolutePath: inputPath, inferringTypeUsing: context)], output: outputPath)
-                await context.copySpec.constructCopyTasks(cbc, delegate, ignoreMissingInputs: ignoreMissingInputs)
+                // The bundle is another target's product, which its own target fills and signs in place after creating it. The target gates already order the copy after that target, so discover the bundle's directory tree when the copy runs instead of declaring it, or its signature is taken right after the bundle directory is created and the next build sees it as changed. installLoc keeps the declared input, as the bundle may be missing there.
+                await context.copySpec.constructCopyTasks(cbc, delegate, ignoreMissingInputs: ignoreMissingInputs, discoverInputDirectoryTrees: !ignoreMissingInputs)
             }
         }
 
