@@ -2273,9 +2273,14 @@ private class SettingsBuilder: ProjectMatchLookup, TripleLookup {
         // FIXME: Arguably we should emit a warning if the optimization settings are out of sync, as the user may be getting weird results.  It's not clear if there are lots of old projects which might spuriously get such a warning, and this isn't a new state of affairs.
         table.push(BuiltinMacros.IS_UNOPTIMIZED_BUILD, literal: (scope.evaluate(BuiltinMacros.GCC_OPTIMIZATION_LEVEL) == "0" || scope.evaluate(BuiltinMacros.SWIFT_OPTIMIZATION_LEVEL) == "-Onone"))
 
+        // A package target's dynamic variant is only built instead of the target when it's linked into more than one
+        // image, so it must compile like the target, which isn't a dylib and has no inferred library level.
+        let isPackageDynamicVariant = project?.isPackage == true && target.map { workspaceContext.workspace.isDynamicVariantOfStandardTarget($0) } == true
+
         // If unset, infer the default SWIFT_LIBRARY_LEVEL from the INSTALL_PATH.  An explicit
         // -library-level in OTHER_SWIFT_FLAGS counts as set; it is emitted first, and last wins.
-        if scope.evaluateAsString(BuiltinMacros.SWIFT_LIBRARY_LEVEL).isEmpty &&
+        if !isPackageDynamicVariant &&
+           scope.evaluateAsString(BuiltinMacros.SWIFT_LIBRARY_LEVEL).isEmpty &&
            scope.evaluate(BuiltinMacros.MACH_O_TYPE) == "mh_dylib" &&
            !scope.evaluate(BuiltinMacros.OTHER_SWIFT_FLAGS).contains(where: {
                $0 == "-library-level"

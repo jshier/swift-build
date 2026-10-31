@@ -164,6 +164,113 @@ fileprivate struct PackageProductConstructionTests: CoreBasedTests {
         }
     }
 
+    /// A package target linked into both an app and the app's hosted tests is built as its dynamic variant only when the tests are built. The variant must compile like the target, so that the module (and compilation cache keys) are the same whichever is built.
+    @Test(.requireSDKs(.macOS))
+    func promotedPackageTargetCompilesLikeTarget() async throws {
+        let swiftSettings = [
+            "SWIFT_EXEC": try await swiftCompilerPath.str,
+            "SWIFT_VERSION": "5",
+            "PRODUCT_NAME": "$(TARGET_NAME)",
+            "CODE_SIGNING_ALLOWED": "NO",
+            "GENERATE_INFOPLIST_FILE": "YES",
+        ]
+        // Like SwiftPM's package targets: not installed, and defining a Clang module.
+        let packageTargetSettings = [
+            "SDKROOT": "auto",
+            "SDK_VARIANT": "auto",
+            "SUPPORTED_PLATFORMS": "$(AVAILABLE_PLATFORMS)",
+            "SKIP_INSTALL": "YES",
+            "DEFINES_MODULE": "YES",
+        ]
+        let testProject = TestProject(
+            "aProject",
+            groupTree: TestGroup("SomeFiles", children: [TestFile("App.swift"), TestFile("AppTests.swift")]),
+            buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: swiftSettings)],
+            targets: [
+                TestStandardTarget(
+                    "App", type: .application,
+                    buildPhases: [
+                        TestSourcesBuildPhase(["App.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("LibProduct"))]),
+                    ],
+                    dependencies: ["LibProduct"]),
+                TestStandardTarget(
+                    "AppTests", type: .unitTest,
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: [
+                        "BUNDLE_LOADER": "$(BUILT_PRODUCTS_DIR)/App.app/Contents/MacOS/App",
+                    ])],
+                    buildPhases: [
+                        TestSourcesBuildPhase(["AppTests.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("LibTestSupportProduct"))]),
+                    ],
+                    dependencies: ["App", "LibTestSupportProduct"]),
+            ])
+        let testPackage = TestPackageProject(
+            "Package",
+            groupTree: TestGroup("OtherFiles", children: [TestFile("Lib.swift"), TestFile("LibTestSupport.swift")]),
+            buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: swiftSettings)],
+            targets: [
+                TestPackageProductTarget(
+                    "LibProduct",
+                    frameworksBuildPhase: TestFrameworksBuildPhase([TestBuildFile(.target("Lib"))]),
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings)],
+                    dependencies: ["Lib"]),
+                TestPackageProductTarget(
+                    "LibTestSupportProduct",
+                    frameworksBuildPhase: TestFrameworksBuildPhase([TestBuildFile(.target("LibTestSupport"))]),
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings)],
+                    dependencies: ["LibTestSupport"]),
+                TestStandardTarget(
+                    "Lib", type: .objectFile,
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings)],
+                    buildPhases: [TestSourcesBuildPhase(["Lib.swift"])],
+                    dynamicTargetVariantName: "Lib-dynamic"),
+                TestStandardTarget(
+                    "Lib-dynamic", type: .framework,
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings.merging([
+                        "PRODUCT_NAME": "Lib",
+                        "TARGET_BUILD_DIR": "$(TARGET_BUILD_DIR)/PackageFrameworks",
+                    ], uniquingKeysWith: { $1 }))],
+                    buildPhases: [TestSourcesBuildPhase(["Lib.swift"])]),
+                TestStandardTarget(
+                    "LibTestSupport", type: .objectFile,
+                    buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: packageTargetSettings)],
+                    buildPhases: [
+                        TestSourcesBuildPhase(["LibTestSupport.swift"]),
+                        TestFrameworksBuildPhase([TestBuildFile(.target("Lib"))]),
+                    ],
+                    dependencies: ["Lib"]),
+            ])
+        let tester = try await TaskConstructionTester(getCore(), TestWorkspace("aWorkspace", projects: [testProject, testPackage]))
+
+        /// The arguments of the target's Swift compilation which describe its library level and IPI Clang modules.
+        func libraryLevelArguments(buildingTests: Bool) async throws -> [String] {
+            let parameters = BuildParameters(configuration: "Debug")
+            let targets = try (["App"] + (buildingTests ? ["AppTests"] : [])).map { name in
+                BuildRequest.BuildTargetInfo(parameters: parameters, target: try #require(tester.workspace.allTargets.first { $0.name == name }))
+            }
+            let buildRequest = BuildRequest(parameters: parameters, buildTargets: targets, continueBuildingAfterErrors: true, useParallelTargets: true, useImplicitDependencies: false, useDryRun: false)
+            var arguments: [String] = []
+            await tester.checkBuild(parameters, runDestination: .macOS, buildRequest: buildRequest) { results in
+                results.checkNoErrors()
+                results.checkTarget(buildingTests ? "Lib-dynamic" : "Lib") { target in
+                    results.checkTask(.matchTarget(target), .matchRuleType("SwiftDriver Compilation")) { task in
+                        let commandLine = task.commandLineAsStrings.map { $0 }
+                        for (index, argument) in commandLine.enumerated() where ["-library-level", "-ipi-clang-module"].contains(argument) && index + 1 < commandLine.count {
+                            arguments += [argument, commandLine[index + 1]]
+                        }
+                    }
+                }
+            }
+            return arguments
+        }
+
+        let targetArguments = try await libraryLevelArguments(buildingTests: false)
+        let variantArguments = try await libraryLevelArguments(buildingTests: true)
+        #expect(variantArguments == targetArguments)
+        #expect(!variantArguments.contains("-library-level"))
+    }
+
     @Test(.requireSDKs(.macOS), .requireXcode26())
     func canLinkUsingObjectOnlyFrameworkBuildPhase() async throws {
         let testProject = try await TestProject(

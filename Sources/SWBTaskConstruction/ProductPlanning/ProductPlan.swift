@@ -1313,6 +1313,10 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
                 let descriptors = self.swiftMacroImplementationDescriptorsByTarget.removeValue(forKey: matchingTarget)
                 self.swiftMacroImplementationDescriptorsByTarget[dynamicConfiguredTarget] = descriptors
 
+                // The IPI Clang modules were computed for the target in the build graph; the dynamic variant must see the same ones to compile like it.
+                let ipiClangModuleNames = self.ipiClangModuleNamesByTarget.removeValue(forKey: matchingTarget)
+                self.ipiClangModuleNamesByTarget[dynamicConfiguredTarget] = ipiClangModuleNames
+
                 if self.targetsRequiredToBuildForIndexing.remove(matchingTarget) != nil {
                     self.targetsRequiredToBuildForIndexing.insert(dynamicConfiguredTarget)
                 }
