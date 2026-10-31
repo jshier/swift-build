@@ -117,6 +117,11 @@ open class TaskAction: PlannedTaskAction, PolymorphicSerializable
         return false
     }
 
+    /// Whether the action executes detached from the scheduler lanes in the build operation with the given context. By default, `shouldExecuteDetached`.
+    open func shouldExecuteDetached(_ operationContext: DynamicTaskOperationContext) -> Bool {
+        return shouldExecuteDetached
+    }
+
     open func cancelDetached() {}
 
     /// Returns a fresh instance to use for a single build engine's execution, or `nil`

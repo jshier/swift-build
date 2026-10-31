@@ -25,6 +25,11 @@ final public class SwiftDriverTaskAction: TaskAction, BuildValueValidatingTaskAc
         return false
     }
 
+    /// Planning (including the dependency scan) can take seconds, mostly waiting on the scanner, and doesn't spawn processes, so when enabled it runs without holding a scheduler lane that compilations and other tasks could use.
+    public override func shouldExecuteDetached(_ operationContext: DynamicTaskOperationContext) -> Bool {
+        return operationContext.swiftDriverPlanningQueue != nil
+    }
+
     public override func taskSetup(_ task: any ExecutableTask, executionDelegate: any TaskExecutionDelegate, dynamicExecutionDelegate: any DynamicTaskExecutionDelegate) {
         for (index, input) in (task.executionInputs ?? []).enumerated() {
             dynamicExecutionDelegate.requestInputNode(node: input, nodeID: UInt(index))
@@ -58,16 +63,32 @@ final public class SwiftDriverTaskAction: TaskAction, BuildValueValidatingTaskAc
             }
 
             let commandLine = task.commandLineAsStrings.split(separator: "--", maxSplits: 1, omittingEmptySubsequences: false)[1]
-            let (success, planBuildDiagnostics) = dependencyGraph.planBuild(key: driverPayload.uniqueID,
-                                                                            compilerLocation: driverPayload.compilerLocation,
-                                                                            target: target,
-                                                                            args: Array(commandLine),
-                                                                            workingDirectory: task.workingDirectory,
-                                                                            tempDirPath: driverPayload.tempDirPath,
-                                                                            explicitModulesTempDirPath: driverPayload.explicitModulesTempDirPath,
-                                                                            environment: environment,
-                                                                            eagerCompilationEnabled: driverPayload.eagerCompilationEnabled,
-                                                                            casOptions: driverPayload.casOptions)
+            let workingDirectory = task.workingDirectory
+            let planBuild: @Sendable () -> (Bool, [Diagnostic]) = {
+                dependencyGraph.planBuild(key: driverPayload.uniqueID,
+                                          compilerLocation: driverPayload.compilerLocation,
+                                          target: target,
+                                          args: Array(commandLine),
+                                          workingDirectory: workingDirectory,
+                                          tempDirPath: driverPayload.tempDirPath,
+                                          explicitModulesTempDirPath: driverPayload.explicitModulesTempDirPath,
+                                          environment: environment,
+                                          eagerCompilationEnabled: driverPayload.eagerCompilationEnabled,
+                                          casOptions: driverPayload.casOptions)
+            }
+            let (success, planBuildDiagnostics): (Bool, [Diagnostic])
+            if let planningQueue = dynamicExecutionDelegate.operationContext.swiftDriverPlanningQueue {
+                // Without a lane bounding it, limit concurrent planning explicitly, and run the blocking planning on its own thread rather than the Swift concurrency thread pool.
+                do {
+                    (success, planBuildDiagnostics) = try await planningQueue.withOperation {
+                        await _Concurrency.Task.detachNewThread(name: "SwiftDriver planning \(driverPayload.moduleName)", planBuild)
+                    }
+                } catch {
+                    return .cancelled
+                }
+            } else {
+                (success, planBuildDiagnostics) = planBuild()
+            }
 
             // Read and emit any serialized diagnostics reported by the scanner. Then report any diagnostics from planBuild
             // which were not present in the serialized diagnostics. We match on the message and location only, because

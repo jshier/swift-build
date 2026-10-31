@@ -14,7 +14,7 @@ import Testing
 
 @_spi(Testing) import SWBCore
 import SWBProtocol
-import SWBUtil
+@_spi(Testing) import SWBUtil
 import SWBTestSupport
 import SwiftBuildTestSupport
 import SWBLLBuild
@@ -5797,6 +5797,59 @@ fileprivate struct SwiftDriverTests: CoreBasedTests {
 
             try await tester.checkBuild(runDestination: .host, buildRequest: buildRequest, persistent: true) { results in
                 results.checkNoErrors()
+            }
+        }
+    }
+
+    /// Planning that runs detached from the scheduler lanes, limited to one at a time with a single lane, still plans every module and records results that make the next build a null build.
+    @Test(.requireSDKs(.macOS))
+    func detachedSwiftDriverPlanning() async throws {
+        try await UserDefaults.withEnvironment(["EnableDetachedSwiftDriverPlanning": "YES", "SwiftDriverPlanningConcurrency": "1"]) {
+            try await withTemporaryDirectory { tmpDirPath async throws -> Void in
+                let testWorkspace = try await TestWorkspace(
+                    "Test",
+                    sourceRoot: tmpDirPath.join("Test"),
+                    projects: [
+                        TestProject(
+                            "aProject",
+                            groupTree: TestGroup("Sources", path: "Sources", children: [
+                                TestFile("a.swift"),
+                                TestFile("b.swift"),
+                                TestFile("c.swift"),
+                            ]),
+                            buildConfigurations: [
+                                TestBuildConfiguration("Debug", buildSettings: [
+                                    "PRODUCT_NAME": "$(TARGET_NAME)",
+                                    "SWIFT_VERSION": swiftVersion,
+                                    "BUILD_VARIANTS": "normal",
+                                    "SWIFT_USE_INTEGRATED_DRIVER": "YES",
+                                    "SWIFT_ENABLE_EXPLICIT_MODULES": "YES",
+                                ])
+                            ],
+                            targets: [
+                                TestStandardTarget("TargetA", type: .framework, buildPhases: [TestSourcesBuildPhase(["a.swift"])]),
+                                TestStandardTarget("TargetB", type: .framework, buildPhases: [TestSourcesBuildPhase(["b.swift"])], dependencies: ["TargetA"]),
+                                TestStandardTarget("TargetC", type: .framework, buildPhases: [TestSourcesBuildPhase(["c.swift"])]),
+                            ])
+                    ])
+                let tester = try await BuildOperationTester(getCore(), testWorkspace, simulated: false)
+                let parameters = BuildParameters(configuration: "Debug")
+                let buildRequest = BuildRequest(parameters: parameters, buildTargets: tester.workspace.projects[0].targets.map({ BuildRequest.BuildTargetInfo(parameters: parameters, target: $0) }), continueBuildingAfterErrors: false, useParallelTargets: true, useImplicitDependencies: false, useDryRun: false, schedulerLaneWidthOverride: 1)
+                let SRCROOT = testWorkspace.sourceRoot.join("aProject")
+
+                try await tester.fs.writeFileContents(SRCROOT.join("Sources/a.swift")) { $0 <<< "import Foundation\npublic struct A { public init() {} }\n" }
+                try await tester.fs.writeFileContents(SRCROOT.join("Sources/b.swift")) { $0 <<< "import TargetA\npublic func b() -> A { A() }\n" }
+                try await tester.fs.writeFileContents(SRCROOT.join("Sources/c.swift")) { $0 <<< "import Foundation\npublic struct C {}\n" }
+
+                try await tester.checkBuild(runDestination: .macOS, buildRequest: buildRequest, persistent: true) { results in
+                    results.checkNoErrors()
+                    for targetName in ["TargetA", "TargetB", "TargetC"] {
+                        results.checkTaskExists(.matchTargetName(targetName), .matchRuleType("SwiftDriver"))
+                        results.checkTaskExists(.matchTargetName(targetName), .matchRuleType("SwiftCompile"))
+                    }
+                }
+
+                try await tester.checkNullBuild(runDestination: .macOS, buildRequest: buildRequest, persistent: true)
             }
         }
     }

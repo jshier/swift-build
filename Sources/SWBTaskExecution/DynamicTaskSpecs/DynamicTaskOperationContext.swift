@@ -25,6 +25,9 @@ public final class DynamicTaskOperationContext {
     package let definingTargetsByModuleName: [String: OrderedSet<ConfiguredTarget>]
     package let cas: ToolchainCAS?
 
+    /// If Swift driver plannings run detached from the scheduler lanes, which otherwise bound them, limits how many run at once.
+    package let swiftDriverPlanningQueue: AsyncOperationQueue?
+
     private let casfsIngestionCache: SWBMutex<[Path: String]> = .init([:])
 
     private struct SearchPathIngestionKey: Hashable {
@@ -33,8 +36,10 @@ public final class DynamicTaskOperationContext {
     }
     private let casfsSearchPathIngestionCache: SWBMutex<[SearchPathIngestionKey: String]> = .init([:])
 
-    package init(core: Core, definingTargetsByModuleName: [String: OrderedSet<ConfiguredTarget>], cas: ToolchainCAS?) {
+    /// - parameter swiftDriverPlanningConcurrency: If Swift driver plannings run detached, how many may run at once.
+    package init(core: Core, definingTargetsByModuleName: [String: OrderedSet<ConfiguredTarget>], cas: ToolchainCAS?, swiftDriverPlanningConcurrency: Int?) {
         self.core = core
+        self.swiftDriverPlanningQueue = swiftDriverPlanningConcurrency.map { AsyncOperationQueue(concurrentTasks: max($0, 1)) }
         self.clangModuleDependencyGraph = ClangModuleDependencyGraph(core: core, definingTargetsByModuleName: definingTargetsByModuleName)
         self.swiftModuleDependencyGraph = SwiftModuleDependencyGraph()
         self.compilationCachingUploader = CompilationCachingUploader()

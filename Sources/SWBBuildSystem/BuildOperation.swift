@@ -1175,7 +1175,7 @@ private struct OperatorSystemAdaptorDynamicContext: DynamicTaskExecutionDelegate
     @discardableResult
     func spawn(commandLine: [String], environment: [String: String], workingDirectory: Path, canSafelyInterrupt: Bool, processDelegate: any ProcessDelegate) async throws -> Bool {
         guard let jobContext else {
-            throw StubError.error("API misuse. Spawning processes is only allowed from `performTaskAction`.")
+            throw StubError.error("API misuse. Spawning processes is only allowed from `performTaskAction` of tasks which don't execute detached.")
         }
 
         // This calls into llb_buildsystem_command_interface_spawn_v2, which can block, so ensure it's shunted to a new thread so as not to block the Swift Concurrency thread pool. This shouldn't risk thread explosion because this function is only allowed to be called from performTaskAction, which in turn should be bounded to ncores based on the number of active llbuild lane threads.
@@ -1305,7 +1305,7 @@ private class InProcessCommand: SWBLLBuild.ExternalCommand, SWBLLBuild.ExternalD
         }
     }
 
-    fileprivate func execute(_ command: Command, _ commandInterface: BuildSystemCommandInterface, _ jobContext: JobContext) async -> CommandResult {
+    fileprivate func execute(_ command: Command, _ commandInterface: BuildSystemCommandInterface, _ jobContext: JobContext?) async -> CommandResult {
         // Get the current output delegate from the adaptor.
         //
         // FIXME: This should never fail (since we are executing), but we have seen a crash here with that assumption. For now we are defensive until the source can be tracked down: <rdar://problem/31670274> Diagnose unexpected missing output delegate from: <rdar://problem/31669245> Crash in InProcessCommand.execute()
@@ -1350,7 +1350,7 @@ private class InProcessCommand: SWBLLBuild.ExternalCommand, SWBLLBuild.ExternalD
     }
 
     var shouldExecuteDetached: Bool {
-        return action.shouldExecuteDetached
+        return action.shouldExecuteDetached(adaptor.dynamicOperationContext)
     }
 
     func executeDetached(
@@ -1359,8 +1359,9 @@ private class InProcessCommand: SWBLLBuild.ExternalCommand, SWBLLBuild.ExternalD
         _ jobContext: JobContext,
         _ resultFn: @escaping (CommandResult, BuildValue?) -> Void
     ) {
+        // The job context of a detached command is only valid until this returns, so don't let the action use it (e.g. to spawn processes).
         _Concurrency.Task<Void, Never> {
-            let result = await self.execute(command, commandInterface, jobContext)
+            let result = await self.execute(command, commandInterface, nil)
             resultFn(result, nil)
         }
     }
@@ -1525,7 +1526,15 @@ internal final class OperationSystemAdaptor: SWBLLBuild.BuildSystemDelegate, Act
             buildOutputDelegate.error(error.localizedDescription)
             cas = nil
         }
-        self.dynamicOperationContext = DynamicTaskOperationContext(core: core, definingTargetsByModuleName: operation.buildDescription.definingTargetsByModuleName, cas: cas)
+        // Detached Swift driver plannings don't occupy a lane, so bound them by the lane width instead (where 0 means the hardware concurrency, as in llbuild).
+        let swiftDriverPlanningConcurrency: Int?
+        if UserDefaults.enableDetachedSwiftDriverPlanning {
+            let laneWidth = operation.serial ? 1 : Int(operation.request.schedulerLaneWidthOverride ?? UserDefaults.schedulerLaneWidth ?? 0)
+            swiftDriverPlanningConcurrency = UserDefaults.swiftDriverPlanningConcurrency ?? (laneWidth > 0 ? laneWidth : ProcessInfo.processInfo.activeProcessorCount)
+        } else {
+            swiftDriverPlanningConcurrency = nil
+        }
+        self.dynamicOperationContext = DynamicTaskOperationContext(core: core, definingTargetsByModuleName: operation.buildDescription.definingTargetsByModuleName, cas: cas, swiftDriverPlanningConcurrency: swiftDriverPlanningConcurrency)
         self.queue = SWBQueue(label: "SWBBuildSystem.OperationSystemAdaptor.queue", qos: operation.request.qos, autoreleaseFrequency: .workItem)
     }
 

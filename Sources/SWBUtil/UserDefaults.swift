@@ -238,6 +238,16 @@ public enum UserDefaults: Sendable {
         return nil
     }
 
+    /// Whether Swift driver planning runs detached from the llbuild scheduler lanes, so that it doesn't hold a lane while it plans.
+    public static var enableDetachedSwiftDriverPlanning: Bool {
+        return bool(forKey: "EnableDetachedSwiftDriverPlanning")
+    }
+
+    /// The maximum number of Swift driver plannings to run concurrently when they run detached, where nil (the default) means the scheduler lane width.
+    public static var swiftDriverPlanningConcurrency: Int? {
+        return hasValue(forKey: "SwiftDriverPlanningConcurrency") ? int(forKey: "SwiftDriverPlanningConcurrency") : nil
+    }
+
     /// What llbuild scheduler algorithm should be used.
     public static var schedulerAlgorithm: String? {
         return string(forKey: "SchedulerAlgorithm")
