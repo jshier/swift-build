@@ -278,7 +278,7 @@ fileprivate extension TargetDependencyResolver {
             linkageDependencyResolver = nil
         }
 
-        // The settings that resolution needs are computed concurrently beforehand (see `SettingsWarmUp`), so resolution itself is serial, which makes it deterministic.
+        // The settings that resolution needs are computed concurrently (see `SettingsWarmUp`), so resolution itself is serial, which makes it deterministic.
         self.resolver = DependencyResolver(workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, delegate: delegate, concurrent: false)
         self.purpose = purpose
     }
@@ -424,8 +424,9 @@ fileprivate extension TargetDependencyResolver {
             break
         }
 
-        // First, compute the settings that resolution needs concurrently, then resolve the graph in a single traversal, which discovers each target's dependencies, configures them with specialization parameters, and adds them to the dependency closure.
-        // The settings of the targets in a graph are computed, and expire, together, so if looking up the first top-level target doesn't construct any settings, those of the rest of the graph are most likely cached. Otherwise, compute the settings that looking up the top-level targets, and then resolving the graph, need concurrently. Debug activity logs would report the targets visited speculatively.
+        // Resolve the graph in a single traversal, which discovers each target's dependencies, configures them with specialization parameters, and adds them to the dependency closure, while the settings it needs are computed concurrently.
+        //
+        // The settings of the targets in a graph are computed, and expire, together, so if looking up the first top-level target doesn't construct any settings, those of the rest of the graph are most likely cached, and computing them concurrently would only slow resolution down. Otherwise, compute the settings that looking up the top-level targets needs, and then those that resolving the graph needs, concurrently with resolving it. Debug activity logs would report the targets visited speculatively.
         let warmUp = SettingsWarmUp(resolver: resolver)
         var settingsAreCached = true
         if let firstTarget = buildRequest.buildTargets.first, !workspaceContext.userPreferences.enableDebugActivityLogs {
@@ -439,13 +440,13 @@ fileprivate extension TargetDependencyResolver {
         let topLevelTargetsToDiscover = await resolver.concurrentMap(maximumParallelism: 100, buildRequest.buildTargets) { [resolver] in
             await resolver.lookupTopLevelConfiguredTarget($0)
         }
-        let settingsWarmUp: Task<Void, Never>?
+        let warmUpTask: Task<Void, Never>?
         if !topLevelTargetsToDiscover.isEmpty && !settingsAreCached {
-            settingsWarmUp = Task.detached(priority: Task.currentPriority) {
+            warmUpTask = Task.detached(priority: Task.currentPriority) {
                 await warmUp.warmUp(topLevelTargets: topLevelTargetsToDiscover)
             }
         } else {
-            settingsWarmUp = nil
+            warmUpTask = nil
         }
 
         // Go through the build requests's top-level configured targets.  For each one we ask it to add its dependencies and then itself to the dependency closure.
@@ -459,8 +460,8 @@ fileprivate extension TargetDependencyResolver {
         }
 
         // The settings which haven't been computed yet won't be needed.
-        settingsWarmUp?.cancel()
-        await settingsWarmUp?.value
+        warmUpTask?.cancel()
+        await warmUpTask?.value
 
         for target in allTargets {
             // we don't want to stop too early (when we are computing the dependency graph) because this prevents us from getting better diagnostics later on, when it matters.
@@ -827,7 +828,7 @@ fileprivate extension TargetDependencyResolver {
         var immediateDependencies = OrderedSet<ResolvedTargetDependency>()
 
         /// Nested function to record that `dependency` is an immediate dependency of the target being processed.
-        let recordImmediateDependency: (ResolvedTargetDependency, SpecializationParameters?, inout OrderedSet<ConfiguredTarget>, inout OrderedSet<ConfiguredTarget>) async -> Void = { [self] dependency, _, dependencyClosure, dependencyPath in
+        let recordImmediateDependency: (ResolvedTargetDependency, inout OrderedSet<ConfiguredTarget>, inout OrderedSet<ConfiguredTarget>) async -> Void = { [self] dependency, dependencyClosure, dependencyPath in
             immediateDependencies.append(dependency)
             if self.resolver.makeAggregateTargetsTransparentForSpecialization && dependency.target.target.type == .aggregate {
                 await addDependencies(forConfiguredTarget: dependency.target, toDependencyClosure: &dependencyClosure, dependencyPath: &dependencyPath, imposedParameters: imposedParameters, inheritedDiscoveryParameters: discoveryImposedParameters)
@@ -841,18 +842,7 @@ fileprivate extension TargetDependencyResolver {
         // Visit all of the immediate dependencies.
         for configuredDependency in discoveredInfo.immediateDependencies {
             if Task.isCancelled { break }
-            let imposedParametersForDependency: SpecializationParameters?
-            if resolver.makeAggregateTargetsTransparentForSpecialization {
-                // Aggregate targets should be transparent for specialization, so unless we already have imposed parameters, we will compute them based on the parent of the aggregate unless that is an aggregate itself.
-                if imposedParameters == nil && configuredDependency.target.target.type == .aggregate && configuredTarget.target.type != .aggregate {
-                    imposedParametersForDependency = resolver.specializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
-                } else {
-                    imposedParametersForDependency = imposedParameters
-                }
-            } else {
-                imposedParametersForDependency = imposedParameters
-            }
-            await recordImmediateDependency(configuredDependency, imposedParametersForDependency, &dependencyClosure, &dependencyPath)
+            await recordImmediateDependency(configuredDependency, &dependencyClosure, &dependencyPath)
         }
 
         // Visit all of the package product targets.
@@ -871,7 +861,7 @@ fileprivate extension TargetDependencyResolver {
 
             // Get the configured dependency.  Package product dependencies are always 'explicit'.
             let configuredDependency = await resolver.lookupConfiguredTarget(dependency, parameters: buildParameters, imposedParameters: specializedParameters)
-            await recordImmediateDependency(ResolvedTargetDependency(target: configuredDependency, reason: .explicit), specializedParameters, &dependencyClosure, &dependencyPath)
+            await recordImmediateDependency(ResolvedTargetDependency(target: configuredDependency, reason: .explicit), &dependencyClosure, &dependencyPath)
         }
 
         // Add the immediate dependencies for this configured target to the cache of that data.
@@ -944,7 +934,7 @@ fileprivate extension TargetDependencyResolver {
 
 /// Computes, concurrently, the settings that resolving the dependency graph will need, so that the serial resolution finds them cached, or being computed.
 ///
-/// Settings are the most expensive part of resolution, and they're computed on demand and cached for the build request, so computing them beforehand doesn't change the result. This visits the targets in the graph speculatively: it predicts the configured target for each dependency without the configured targets created so far, which resolution prefers if they're compatible. Where the prediction differs from the configured target resolution chooses, resolution computes the remaining settings itself.
+/// Settings are the most expensive part of resolution, and they're computed on demand and cached for the build request, so computing them early doesn't change the result. This visits the targets in the graph speculatively: it predicts the configured target for each dependency without the configured targets created so far, which resolution prefers if they're compatible. Where the prediction differs from the configured target resolution chooses, resolution computes the remaining settings itself.
 private final class SettingsWarmUp: Sendable {
     let resolver: DependencyResolver
     private let visited = SWBMutex<Set<ConfiguredTarget>>([])
