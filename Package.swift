@@ -500,6 +500,18 @@ if isStaticBuild {
     }
 }
 
+// `SWB_ENABLE_RESOLUTION_BENCHMARK` adds a benchmark of dependency resolution and planning, which links the testing support library, so it isn't built by default. On macOS, set `DEVELOPER_DIR` to the Xcode to find the Testing framework in.
+if Context.environment["SWB_ENABLE_RESOLUTION_BENCHMARK"] != nil {
+    let developerDirectory = Context.environment["DEVELOPER_DIR"] ?? "/Applications/Xcode.app/Contents/Developer"
+    let platformDirectory = "\(developerDirectory)/Platforms/MacOSX.platform/Developer"
+    package.targets.append(
+        .executableTarget(
+            name: "SWBResolutionBench",
+            dependencies: ["SWBCore", "SWBTaskConstruction", "SWBTaskExecution", "SWBTestSupport", "SWBUtil", "SWBProtocol"],
+            swiftSettings: swiftSettings(languageMode: .v5),
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "\(platformDirectory)/Library/Frameworks", "-Xlinker", "-rpath", "-Xlinker", "\(platformDirectory)/usr/lib"], .when(platforms: [.macOS]))]))
+}
+
 // `SWIFTCI_USE_LOCAL_DEPS` configures if dependencies are locally available to build
 if useLocalDependencies {
     package.dependencies += [
