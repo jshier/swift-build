@@ -207,12 +207,23 @@ public protocol PluginManager: Sendable {
 private final class ImmutablePluginManager: Sendable, PluginManager {
     private let loadedPlugins: [String: Path]
     public let loadingDiagnostics: [Diagnostic]
-    private let extensions: [Ref<any ExtensionPoint>: [any Sendable]]
+    /// The extensions of each extension point, keyed by the type of the extension point, in a stable order.
+    private let extensionsByExtensionPointType: [ObjectIdentifier: [any Sendable]]
 
     @PluginExtensionSystemActor public init(pluginManager: MutablePluginManager) {
         self.loadedPlugins = pluginManager.loadedPlugins
         self.loadingDiagnostics = pluginManager.loadingDiagnostics
-        self.extensions = pluginManager.extensions
+        // Extensions are looked up often, for example while constructing settings, so group and sort them once.
+        var extensionsByExtensionPointType = [ObjectIdentifier: [any Sendable]]()
+        for (key, value) in pluginManager.extensions {
+            extensionsByExtensionPointType[ObjectIdentifier(type(of: key.instance)), default: []].append(contentsOf: value)
+        }
+        // Guarantee stability across process executions by sorting on the type description.
+        self.extensionsByExtensionPointType = extensionsByExtensionPointType.mapValues { extensions in
+            extensions.sorted {
+                String(reflecting: type(of: $0)) < String(reflecting: type(of: $1))
+            }
+        }
     }
 
     public var pluginsByIdentifier: [String: any CommonPlugin] {
@@ -220,16 +231,7 @@ private final class ImmutablePluginManager: Sendable, PluginManager {
     }
 
     public func extensions<T: ExtensionPoint>(of extensionPoint: T.Type) -> [T.ExtensionProtocol] {
-        // Guarantee stability across process executions by sorting on the type description.
-        let collected: [any Sendable] = extensions.flatMap { key, value in
-            if type(of: key.instance) == extensionPoint {
-                return value
-            }
-            return []
-        }
-        return collected.sorted {
-            String(reflecting: type(of: $0)) < String(reflecting: type(of: $1))
-        } as! [T.ExtensionProtocol]
+        (extensionsByExtensionPointType[ObjectIdentifier(extensionPoint)] ?? []) as! [T.ExtensionProtocol]
     }
 }
 

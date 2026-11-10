@@ -274,8 +274,8 @@ public final class MacroNamespace: CustomDebugStringConvertible, Encodable, Send
     /// "Parses" `string` as a literal macro expression string.
     public func parseLiteralString(_ string: String, allowSubstitutionPrefix: Bool = false) -> MacroStringExpression {
         // Use interning, if enabled.
-        if let table = MacroNamespace.stringExpressionInterningTable {
-            return table.getOrInsert(string) { _parseLiteralString(string, allowSubstitutionPrefix: allowSubstitutionPrefix) }
+        if MacroNamespace.activeInterningRequests.load(ordering: .relaxed) > 0 {
+            return MacroNamespace.stringExpressionInterningTable.getOrInsert(string) { _parseLiteralString(string, allowSubstitutionPrefix: allowSubstitutionPrefix) }
         }
 
         return _parseLiteralString(string, allowSubstitutionPrefix: allowSubstitutionPrefix)
@@ -493,64 +493,65 @@ public final class MacroNamespace: CustomDebugStringConvertible, Encodable, Send
     ///
     /// We currently only actual intern literal strings, because non-literal strings need to be careful about the possibility of diagnostics during parsing.
     public static func withExpressionInterningEnabled<T>(body: () throws -> T) rethrows -> T {
-        // Install the interning table while active.
-        interningState.withLock { interningState in
-            interningState.numActiveInterningRequests += 1
-            if interningState.numActiveInterningRequests == 1 {
-                interningState._stringExpressionInterningTable = Registry()
-            }
-        }
-        defer {
-            // Drop the count.
-            interningState.withLock { interningState in
-                interningState.numActiveInterningRequests -= 1
-                if interningState.numActiveInterningRequests == 0 {
-                    interningState._stringExpressionInterningTable = nil
-                }
-            }
-        }
-
-        // Execute the body.
+        beginInterning()
+        defer { endInterning() }
         return try body()
     }
 
     public static func withExpressionInterningEnabled<T>(body: () async throws -> T) async rethrows -> T {
-        // Install the interning table while active.
-        interningState.withLock { interningState in
-            interningState.numActiveInterningRequests += 1
-            if interningState.numActiveInterningRequests == 1 {
-                interningState._stringExpressionInterningTable = Registry()
-            }
-        }
-        defer {
-            // Drop the count.
-            interningState.withLock { interningState in
-                interningState.numActiveInterningRequests -= 1
-                if interningState.numActiveInterningRequests == 0 {
-                    interningState._stringExpressionInterningTable = nil
-                }
-            }
-        }
-
-        // Execute the body.
+        beginInterning()
+        defer { endInterning() }
         return try await body()
     }
 
-    struct InterningState: ~Copyable {
-        /// The number of active interning requests.
-        ///
-        /// When this drops to 0 the interning tables will be released.
-        var numActiveInterningRequests = 0
-
-        var _stringExpressionInterningTable: Registry<String, MacroStringExpression>? = nil
+    private static func beginInterning() {
+        activeInterningRequests.add(1, ordering: .relaxed)
     }
 
-    /// The lock used to protect access to the shared string interning state.
-    static let interningState = SWBMutex<InterningState>(.init())
+    private static func endInterning() {
+        // Release the interned expressions when the last request ends. An expression interned by a parse that raced with this stays interned until the next time interning ends, which doesn't affect the parsed expressions.
+        if activeInterningRequests.subtract(1, ordering: .relaxed).newValue == 0 {
+            stringExpressionInterningTable.removeAll()
+        }
+    }
 
-    /// The table to use for parsed string expression interning, if installed.
-    static var stringExpressionInterningTable: Registry<String, MacroStringExpression>? {
-        return interningState.withLock{ $0._stringExpressionInterningTable }
+    /// The number of active interning requests. Expressions are interned while this is greater than zero.
+    static let activeInterningRequests = Atomic<Int>(0)
+
+    /// The table used for parsed string expression interning.
+    static let stringExpressionInterningTable = ExpressionInterningTable()
+}
+
+/// A table of interned string expressions, which is sharded so that settings can be constructed concurrently without contending on a single lock.
+final class ExpressionInterningTable: Sendable {
+    private final class Shard: Sendable {
+        let expressions = SWBMutex<[String: MacroStringExpression]>([:])
+        // Keep each shard's lock on its own cache line.
+        private let padding: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+
+    private static let shardCount = 64
+    private let shards = (0..<ExpressionInterningTable.shardCount).map { _ in Shard() }
+
+    func getOrInsert(_ string: String, _ create: () -> MacroStringExpression) -> MacroStringExpression {
+        let shard = shards[Int(UInt(bitPattern: string.hashValue) % UInt(Self.shardCount))]
+        if let expression = shard.expressions.withLock({ $0[string] }) {
+            return expression
+        }
+        let expression = create()
+        return shard.expressions.withLock { expressions in
+            if let existing = expressions[string] {
+                return existing
+            }
+            expressions[string] = expression
+            return expression
+        }
+    }
+
+    func removeAll() {
+        for shard in shards {
+            shard.expressions.withLock { $0.removeAll() }
+        }
     }
 }
 

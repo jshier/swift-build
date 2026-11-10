@@ -13,6 +13,7 @@
 public import SWBUtil
 public import SWBProtocol
 import class Foundation.ProcessInfo
+import Synchronization
 public import SWBMacro
 
 /// Delegate protocol used to report diagnostics.
@@ -555,6 +556,9 @@ public final class SDKRegistry: SDKRegistryLookup, CustomStringConvertible, Send
     /// The map of canonical name strings parsed to semantic understandings of an SDK name.
     private let parsedSDKNames = Registry<String, Result<SDK.CanonicalNameComponents, any Error>>()
 
+    /// The results of looking up SDKs by a name without a version, which compares the names of all SDKs, along with the number of SDKs registered when they were looked up, so that registering an SDK invalidates them.
+    private let newestSDKsByUnversionedName = SWBMutex<(registrations: Int, sdks: [String: SDK?])>((0, [:]))
+
     private func parseSDKName(_ canonicalName: String) throws -> SDK.CanonicalNameComponents {
         try parsedSDKNames.getOrInsert(canonicalName) {
             Result { try SDK.parseSDKName(canonicalName, registry: self) }
@@ -982,6 +986,10 @@ public final class SDKRegistry: SDKRegistryLookup, CustomStringConvertible, Send
             self.sdksByAlias[alias] = (self.sdksByAlias[alias] ?? []) + [sdk]
         }
 
+        newestSDKsByUnversionedName.withLock { cache in
+            cache = (cache.registrations + 1, [:])
+        }
+
         sdksByPath[path] = sdk
         sdksByPath[pathResolved] = sdk
 
@@ -1071,6 +1079,21 @@ public final class SDKRegistry: SDKRegistryLookup, CustomStringConvertible, Send
         }
 
         // Otherwise, we're looking for an SDK using a placeholder which basically means "look for the newest-version SDK which has the same exact base name, matching suffixes".
+        let (registrations, cachedSDK) = newestSDKsByUnversionedName.withLock { cache in (cache.registrations, cache.sdks[canonicalName]) }
+        if let cachedSDK {
+            return cachedSDK
+        }
+        let sdk = newestSDK(unversionedName: canonicalName)
+        newestSDKsByUnversionedName.withLock { cache in
+            if cache.registrations == registrations {
+                cache.sdks[canonicalName] = .some(sdk)
+            }
+        }
+        return sdk
+    }
+
+    /// Returns the newest SDK with the base name and suffix of the given canonical name, which has no version.
+    private func newestSDK(unversionedName canonicalName: String) -> SDK? {
         // Split the requested SDK into pieces.  If we can't, then we return nil.
         guard let components = try? parseSDKName(canonicalName) else {
             return nil
