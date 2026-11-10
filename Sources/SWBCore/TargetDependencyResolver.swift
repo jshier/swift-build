@@ -360,7 +360,7 @@ fileprivate extension TargetDependencyResolver {
 
         // Visit the targets depending on a target before it.
         for configuredTarget in allTargets.reversed() {
-            let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+            let settings = resolver.settings(for: configuredTarget)
             settingsByTarget[configuredTarget] = settings
 
             // The architectures of the targets depending on this one, if they all carry them over.
@@ -471,7 +471,7 @@ fileprivate extension TargetDependencyResolver {
             if Task.isCancelled { break }
             if let allSuperimposedSpecializations = await resolver.superimposedSpecializations[configuredTarget.target] {
                 var overridesToApply = [String: String]()
-                let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+                let settings = resolver.settings(for: configuredTarget)
                 for specialization in allSuperimposedSpecializations {
                     if let superimposedProperties = specialization.superimposedProperties, specialization.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
                         // At this point we have some properties to apply to a target which is compatible with our specialization, so we add them to the overrides to apply.  This unifies overrides from potentially multiple specializations.
@@ -505,7 +505,7 @@ fileprivate extension TargetDependencyResolver {
             var configuredTargetsPerPlatform = [Ref<Platform>?: [ConfiguredTarget]]()
             var settingsForConfiguredTarget = [ConfiguredTarget: Settings]()
             for ct in configuredTargets {
-                let settings = buildRequestContext.getCachedSettings(ct.parameters, target: ct.target)
+                let settings = resolver.settings(for: ct)
                 settingsForConfiguredTarget[ct] = settings
                 let platform = settings.platform.map({ Ref($0) })
                 if let configuredTargets = configuredTargetsPerPlatform[platform] {
@@ -594,7 +594,7 @@ fileprivate extension TargetDependencyResolver {
                             case .explicit:
                                 if let dependencyStandardTarget = dependency.target.target as? StandardTarget {
                                     // The product reference name may itself be a build setting expression, so evaluate it in the dependency's scope to obtain the concrete basename.
-                                    let productName = dependencyStandardTarget.productReference.evaluatedName(computeSettings: { buildRequestContext.getCachedSettings(dependency.target.parameters, target: dependency.target.target) })
+                                    let productName = dependencyStandardTarget.productReference.evaluatedName(computeSettings: { resolver.settings(for: dependency.target) })
                                     if buildFilePath == nil {
                                         // This might be expensive, so we try to evaluate it only once per build file.
                                         buildFilePath = resolver.resolveBuildFilePath(buildFile, filePathResolver: filePathResolver, dynamicallyBuildingTargets: resolver.dynamicallyBuildingTargets)
@@ -659,7 +659,7 @@ fileprivate extension TargetDependencyResolver {
             for configuredTarget in allTargets.reversed() {
                 if requestedTargetGUIDs.contains(configuredTarget.target.guid) {
                     keptTargets.insert(configuredTarget, at: 0)
-                    let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+                    let settings = resolver.settings(for: configuredTarget)
                     if settings.globalScope.evaluate(BuiltinMacros.DEPENDENCY_SCOPE_INCLUDES_DIRECT_DEPENDENCIES) {
                         // Track targets requested via flattening specially, because the build setting is not applied recursively. If A depends on B depends on C and A/B both set DEPENDENCY_SCOPE_INCLUDES_DIRECT_DEPENDENCIES=YES, but only A was present in the build request, we should only build A and B.
                         extraRequestedTargetGUIDs.formUnion(configuredTarget.target.dependencies.map(\.guid))
@@ -686,7 +686,7 @@ fileprivate extension TargetDependencyResolver {
 
         // Then, remove targets based on the value of the __SKIP_BUILD setting.
         let targetsToRemoveBasedOnSettings = keptTargets.filter { configuredTarget in
-            let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+            let settings = resolver.settings(for: configuredTarget)
             return settings.globalScope.evaluate(BuiltinMacros.__SKIP_BUILD)
         }
         keptTargets.subtract(targetsToRemoveBasedOnSettings)
@@ -758,7 +758,7 @@ fileprivate extension TargetDependencyResolver {
         // Targets are discovered with their own specialization parameters imposed on their dependencies, except for aggregate targets, which pass on those of the targets depending on them when they're transparent for specialization. (Unlike `imposedParameters`, these are also defined for aggregate targets which top-level targets depend on.)
         let discoveryImposedParameters = imposedParameters ?? inheritedDiscoveryParameters ?? resolver.specializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
         if configuredTarget.target.type == .aggregate && resolver.makeAggregateTargetsTransparentForSpecialization, discoveredTargets[configuredTarget] != nil {
-            let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+            let settings = resolver.settings(for: configuredTarget)
             if !discoveryImposedParameters.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
                 resolver.emitUnsupportedAggregateTargetDiagnostic(for: configuredTarget)
             }
@@ -789,7 +789,7 @@ fileprivate extension TargetDependencyResolver {
 
         // Get the discovered target info, or create it if the target is visited with an incompatible specialization.
         let discoveredInfo: DiscoveredTargetInfo
-        if let info = discoveredTargets[configuredTarget], imposedParameters == nil || imposedParameters?.isCompatible(with: configuredTarget, settings: buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target), workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) == true {
+        if let info = discoveredTargets[configuredTarget], imposedParameters == nil || imposedParameters?.isCompatible(with: configuredTarget, settings: resolver.settings(for: configuredTarget), workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) == true {
             discoveredInfo = info
         } else {
             if resolver.makeAggregateTargetsTransparentForSpecialization {

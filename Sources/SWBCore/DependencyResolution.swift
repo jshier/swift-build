@@ -70,8 +70,8 @@ struct SuperimposedProperties: Hashable, CustomStringConvertible {
                         return false
                     }
                     // The product reference name may itself be a build setting expression, so evaluate it in the dependency's scope to obtain the concrete basename.
-                    let dependencyProductName = dependencyStandardTarget.productReference.evaluatedName(computeSettings: { dependencyResolver.buildRequestContext.getCachedSettings(dependency.parameters, target: dependency.target) })
-                    let targetSettings = dependencyResolver.buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+                    let dependencyProductName = dependencyStandardTarget.productReference.evaluatedName(computeSettings: { dependencyResolver.settings(for: dependency) })
+                    let targetSettings = dependencyResolver.settings(for: configuredTarget)
                     let platformFilter = PlatformFilter.init(targetSettings.globalScope)
                     let buildConfigurationFilter = BuildConfigurationFilter.init(targetSettings.globalScope)
                     let filePathResolver = targetSettings.makeFilePathResolver(cacheResults: true)
@@ -523,6 +523,16 @@ extension SpecializationParameters {
     /// Top-level targets get defaults imposed, in case that they are themselves using "auto" anywhere.
     let defaultImposedParameters: SpecializationParameters
 
+    /// The settings of configured targets for their own parameters, which resolution looks up repeatedly, memoized for the resolution because looking them up in the settings cache compares the build parameters.
+    nonisolated let settingsByConfiguredTarget = ShardedRegistry<ConfiguredTarget, Settings>()
+
+    /// Returns the settings of a configured target for its own parameters.
+    nonisolated func settings(for configuredTarget: ConfiguredTarget) -> Settings {
+        settingsByConfiguredTarget.getOrInsert(configuredTarget) {
+            buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+        }
+    }
+
     /// The memoized specialization parameters of configured targets.
     nonisolated let specializationParametersByConfiguredTarget = ShardedRegistry<ConfiguredTarget, SpecializationParameters>()
 
@@ -631,7 +641,7 @@ extension SpecializationParameters {
             return
         }
         // Create SpecializationParameters for the purpose of matching targets to which these properties should be applied when postprocessing the dependency graph
-        let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+        let settings = self.settings(for: configuredTarget)
         let superimposedSpecialization = SpecializationParameters(source: .synthesized, platform: settings.platform, sdkVariant: settings.sdkVariant, supportedPlatforms: nil, toolchain: nil, canonicalNameSuffix: nil, superimposedProperties: superimposedProperties)
         superimposedSpecializations[configuredTarget.target, default: Set<SpecializationParameters>()].insert(superimposedSpecialization)
     }
@@ -749,7 +759,7 @@ extension SpecializationParameters {
             if ct.specializeGuidForActiveRunDestination && parameters.activeRunDestination != ct.parameters.activeRunDestination {
                 return false
             }
-            let dependencySettings = buildRequestContext.getCachedSettings(ct.parameters, target: ct.target)
+            let dependencySettings = self.settings(for: ct)
             let dependencyPlatform = dependencySettings.platform
             let dependencySdkVariant = dependencySettings.sdkVariant?.name
             let dependencyToolchains = dependencySettings.toolchains
@@ -788,7 +798,7 @@ extension SpecializationParameters {
 
                 var hasMultipleTargets = false
                 for previousConfiguredTarget in previousConfiguredTargets {
-                    let previousSettings = buildRequestContext.getCachedSettings(previousConfiguredTarget.parameters, target: previousConfiguredTarget.target)
+                    let previousSettings = self.settings(for: previousConfiguredTarget)
                     if currentSettings.platform?.displayName == previousSettings.platform?.displayName && currentSettings.sdkVariant?.name == previousSettings.sdkVariant?.name {
                         // Allow multiple configured targets with separate run destinations (this is only the case for
                         // the workspace build description today).
@@ -1057,7 +1067,7 @@ extension SpecializationParameters {
 
     /// Get the resolved explicit dependencies for an individual target.  This does not include any implicit dependencies.
     @_spi(Testing) public nonisolated func explicitDependencies(for configuredTarget: ConfiguredTarget) -> [Target] {
-        let scope = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target).globalScope
+        let scope = self.settings(for: configuredTarget).globalScope
 
         // The filters are only needed by dependencies which have filters, and the platform filter is relatively expensive to compute, so compute them only if needed.
         var _filteringContext: TargetDependencyFilteringContext? = nil

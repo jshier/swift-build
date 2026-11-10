@@ -155,7 +155,7 @@ actor LinkageDependencyResolver {
         let visited = !visitedDiscoveredTargets.insert(configuredTarget).inserted
 
         if visited && configuredTarget.target.type == .aggregate && resolver.makeAggregateTargetsTransparentForSpecialization {
-            let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+            let settings = resolver.settings(for: configuredTarget)
             if let imposedParameters = imposedParameters, !imposedParameters.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
                 resolver.emitUnsupportedAggregateTargetDiagnostic(for: configuredTarget)
             }
@@ -260,7 +260,7 @@ actor LinkageDependencyResolver {
         let productNamesOfExplicitDependencies = Set<String>(immediateDependencies.compactMap { dependency -> String? in
             guard let standardTarget = dependency.target as? StandardTarget else { return nil }
             // The product reference name may itself be a build setting expression, so evaluate it in the dependency's scope to obtain the concrete basename.
-            return standardTarget.productReference.evaluatedName(computeSettings: { buildRequestContext.getCachedSettings(dependency.parameters, target: dependency.target) })
+            return standardTarget.productReference.evaluatedName(computeSettings: { resolver.settings(for: dependency) })
         })
 
         // Get information about the configured target which we need to determine its implicit dependencies.
@@ -398,7 +398,7 @@ actor LinkageDependencyResolver {
         }
 
         // FIXME: Move settings into ConfiguredTarget.
-        let configuredTargetSettings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+        let configuredTargetSettings = resolver.settings(for: configuredTarget)
         let configuredTargetPlatform = configuredTargetSettings.platform
 
         // Don't make a target depend on itself.
