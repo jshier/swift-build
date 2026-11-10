@@ -50,6 +50,93 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
     /// The settings of each configured target, which task producers look up repeatedly, including for other targets.
     private let settingsByTarget = ShardedRegistry<ConfiguredTarget, Settings>()
 
+    /// The first configured target for each target in the build graph.
+    private let firstConfiguredTargetByTarget = LazyCache { (plan: GlobalProductPlan) -> [ObjectIdentifier: ConfiguredTarget] in
+        var firstConfiguredTargetByTarget = [ObjectIdentifier: ConfiguredTarget]()
+        for configuredTarget in plan.planRequest.buildGraph.allTargets where firstConfiguredTargetByTarget[ObjectIdentifier(configuredTarget.target)] == nil {
+            firstConfiguredTargetByTarget[ObjectIdentifier(configuredTarget.target)] = configuredTarget
+        }
+        return firstConfiguredTargetByTarget
+    }
+
+    /// The configured targets of the plan and their dependencies as indices, for walking the transitive dependencies of targets without looking up the dependencies of each target repeatedly. This is computed when first used, after the plan has been initialized.
+    private struct DependencyIndexGraph: Sendable {
+        let indexByTarget: [ConfiguredTarget: Int]
+        let targets: [ConfiguredTarget]
+        let dependencies: [[Int]]
+    }
+
+    private let dependencyIndexGraph = LazyCache { (plan: GlobalProductPlan) -> DependencyIndexGraph in
+        var indexByTarget = [ConfiguredTarget: Int]()
+        var targets = [ConfiguredTarget]()
+        func index(of target: ConfiguredTarget) -> Int {
+            if let index = indexByTarget[target] {
+                return index
+            }
+            indexByTarget[target] = targets.count
+            targets.append(target)
+            return targets.count - 1
+        }
+        for target in plan.planRequest.buildGraph.allTargets {
+            _ = index(of: target)
+        }
+        // The dependencies may include targets which aren't in the build graph, such as targets building dynamically to resolve diamond linkage.
+        var dependencies = [[Int]]()
+        while dependencies.count < targets.count {
+            dependencies.append(plan.dependencies(of: targets[dependencies.count]).map { index(of: $0) })
+        }
+        return DependencyIndexGraph(indexByTarget: indexByTarget, targets: targets, dependencies: dependencies)
+    }
+
+    /// Calls `body` once with each of the transitive dependencies of `configuredTarget`, in an unspecified order. Like `transitiveClosure`, the target itself is included only if it depends on itself.
+    package func forEachTransitiveDependency(of configuredTarget: ConfiguredTarget, _ body: (ConfiguredTarget) throws -> Void) rethrows {
+        let graph = dependencyIndexGraph.getValue(self)
+        guard let start = graph.indexByTarget[configuredTarget] else {
+            for dependency in transitiveClosure([configuredTarget], successors: dependencies(of:)).result {
+                try body(dependency)
+            }
+            return
+        }
+        var visited = Set<Int>()
+        var indicesToVisit = [start]
+        while let index = indicesToVisit.popLast() {
+            for dependencyIndex in graph.dependencies[index] where visited.insert(dependencyIndex).inserted {
+                indicesToVisit.append(dependencyIndex)
+                try body(graph.targets[dependencyIndex])
+            }
+        }
+    }
+
+    private struct MemoizedValueKey: Hashable, Sendable {
+        let configuredTarget: ConfiguredTarget?
+        let key: String
+    }
+
+    private let memoizedValues = ShardedRegistry<MemoizedValueKey, any Sendable>()
+
+    /// Returns a value computed from a configured target, memoized for the plan, for task producers which compute the same value from each of the targets their target depends on, so that it's computed once rather than for each target depending on it.
+    ///
+    /// - parameter key: Identifies the value, and must include anything the value depends on other than the configured target.
+    package func memoizedValue<Value: Sendable>(for configuredTarget: ConfiguredTarget, key: String, _ compute: () -> Value) -> Value {
+        memoizedValues.getOrInsert(MemoizedValueKey(configuredTarget: configuredTarget, key: key)) { compute() } as! Value
+    }
+
+    /// Returns a value memoized for the plan, for task producers which compute the same value for each target.
+    ///
+    /// - parameter key: Identifies the value, and must include anything the value depends on.
+    package func memoizedValue<Value: Sendable>(key: String, _ compute: () -> Value) -> Value {
+        memoizedValues.getOrInsert(MemoizedValueKey(configuredTarget: nil, key: key)) { compute() } as! Value
+    }
+
+    /// The targets being built.
+    package var targetsBeingBuilt: Set<SWBCore.Target> {
+        targetsBeingBuiltCache.getValue(self)
+    }
+
+    private let targetsBeingBuiltCache = LazyCache { (plan: GlobalProductPlan) -> Set<SWBCore.Target> in
+        Set(plan.allTargets.map { $0.target })
+    }
+
     /// The set of shared intermediate nodes that have been created, keyed by their sharing identifier.
     ///
     /// This is a limited mechanism for concurrent task construction processes to coordinate on the production of a shared node.
@@ -1407,13 +1494,9 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
     /// This method is intended for use when querying cross-target information where the configuration parameters are not known. In this case, we will use the "best" configured target that we know of, ideally one for the current build. If no configured target is available, we will use one that is configured "as if" the target was building.
     func getUnconfiguredTargetSettings(_ target: SWBCore.Target, viewedFrom: ConfiguredTarget) -> Settings {
         // FIXME: Find the "best" configured target.
-        //
-        // FIXME: Make efficient.
-        for ct in planRequest.buildGraph.allTargets {
-            if ct.target === target {
-                // We found the target in the build, use it.
-                return getTargetSettings(ct)
-            }
+        if let ct = firstConfiguredTargetByTarget.getValue(self)[ObjectIdentifier(target)] {
+            // We found the target in the build, use it.
+            return getTargetSettings(ct)
         }
 
         // Otherwise, the target is not participating in the build. Use the target as configured with the base build parameters.  Specifically don't include the provisioning task inputs in the settings, since unconfigured targets never have those inputs computed for them.

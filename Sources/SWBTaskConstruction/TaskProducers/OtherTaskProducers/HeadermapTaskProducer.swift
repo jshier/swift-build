@@ -249,13 +249,17 @@ final class HeadermapTaskProducer: PhasedTaskProducer, TaskProducer {
         let includeFrameworkEntriesForTargetsNotBeingBuilt = scope.evaluate(BuiltinMacros.HEADERMAP_INCLUDES_FRAMEWORK_ENTRIES_FOR_TARGETS_NOT_BEING_BUILT)
 
         // Compute the set of targets being built.
-        let targetsBeingBuilt = Set<Target>(context.globalProductPlan.allTargets.map { $0.target })
+        let targetsBeingBuilt = context.globalProductPlan.targetsBeingBuilt
 
         // Build up the installed framework and non-framework style key mappings, for every target.
         var seenInstalledFrameworkMappings = Set<Path>()
         var nonFrameworkMappings = OrderedDictionary<Path, Path>()
 
-        for (target, targetInfo) in projectInfo.targetHeaderInfo.sorted(byKey: { ($0.name + $0.guid) < ($1.name + $1.guid) }) {
+        // Each target sorts the targets of its project the same way, so do it once for the plan.
+        let sortedTargetHeaderInfo = context.globalProductPlan.memoizedValue(key: "TargetHeaderInfoSortedByNameAndGUID:\(project.guid)") {
+            projectInfo.targetHeaderInfo.sorted(byKey: { ($0.name + $0.guid) < ($1.name + $1.guid) })
+        }
+        for (target, targetInfo) in sortedTargetHeaderInfo {
             // Compute the target's product name.
             let settings = context.globalProductPlan.getUnconfiguredTargetSettings(target, viewedFrom: context.configuredTarget!)
             let scope = settings.globalScope
