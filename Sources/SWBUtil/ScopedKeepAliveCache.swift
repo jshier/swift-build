@@ -19,7 +19,8 @@ import Synchronization
 /// - Supports recursive and concurrent invocations of `keepAlive`, which effectively extend the lifetime of cache entries until the last active `keepAlive`
 /// - After `keepAlive`, entries are removed from the non-evicting store on a background task which doesn't block cache clients
 public final class ScopedKeepAliveCache<Key: Hashable & Sendable, Value: Sendable, BaseCache: KeyValueStorage<Key, Value> & Sendable>: KeyValueStorage & Sendable {
-    private typealias Store = Registry<Key, Value>
+    // The store is accessed by every lookup, often from many threads at once, so it is sharded.
+    private typealias Store = ShardedRegistry<Key, Value>
 
     private struct State {
         /// Tracks the number of active invocations of `keepAlive`

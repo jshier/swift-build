@@ -25,10 +25,10 @@ public struct BuildParameters: Hashable, SerializableCodable, Sendable {
     /// An optional overriding configuration to build Swift packages with.
     public let packageConfigurationOverride: String?
 
-    public let activeRunDestination: RunDestinationInfo?
+    public private(set) var activeRunDestination: RunDestinationInfo?
 
     /// The active architecture to use, if defined.
-    public let activeArchitecture: String?
+    public private(set) var activeArchitecture: String?
 
     /// The configured build arena.
     public let arena: ArenaInfo?
@@ -36,28 +36,28 @@ public struct BuildParameters: Hashable, SerializableCodable, Sendable {
     // FIXME: This needs to be a fancier type, it should be a table capable of the full complexity of macro setting definition (macro types, multiple definitions, and conditions).
     //
     /// The overriding build parameters.
-    public let overrides: [String: String]
+    public private(set) var overrides: [String: String]
 
     // FIXME: This needs to be a fancier type, it should be a table capable of the full complexity of macro setting definition (macro types, multiple definitions, and conditions).
     //
     /// The command line overrides.
-    public let commandLineOverrides: [String: String]
+    public private(set) var commandLineOverrides: [String: String]
 
     /// The command line xcconfig overrides.
-    public let commandLineConfigOverridesPath: Path?
+    public private(set) var commandLineConfigOverridesPath: Path?
 
     // FIXME: This should be just the path of the command line xcconfig, but Xcode has trouble giving us that currently.
     //
     /// The command line xcconfig overrides.
-    public let commandLineConfigOverrides: [String: String]
+    public private(set) var commandLineConfigOverrides: [String: String]
 
     /// The environment xcconfig overrides.
-    public let environmentConfigOverridesPath: Path?
+    public private(set) var environmentConfigOverridesPath: Path?
 
     // FIXME: This should be just the path of the environment xcconfig, but Xcode has trouble giving us that currently.
     //
     /// The environment xcconfig overrides.
-    public let environmentConfigOverrides: [String: String]
+    public private(set) var environmentConfigOverrides: [String: String]
 
     public let toolchainOverride: String?
 
@@ -124,14 +124,31 @@ public struct BuildParameters: Hashable, SerializableCodable, Sendable {
         self.environmentConfigOverrides = environmentConfigOverrides
         self.toolchainOverride = toolchainOverride
 
-        if let configuration = configuration?.lowercased() {
-            let isDebug = configuration.contains("debug") || configuration.contains("development")
-            self.packageConfigurationOverride = isDebug ? "Debug" : "Release"
-        } else {
-            self.packageConfigurationOverride = nil
-        }
-
+        self.packageConfigurationOverride = Self.packageConfigurationOverride(for: configuration)
         self.precomputedHash = computedHashValue()
+    }
+
+    private static func packageConfigurationOverride(for configuration: String?) -> String? {
+        guard let configuration = configuration?.lowercased() else {
+            return nil
+        }
+        let isDebug = configuration.contains("debug") || configuration.contains("development")
+        return isDebug ? "Debug" : "Release"
+    }
+
+    /// Returns these parameters with some of their properties replaced. This is cheaper than creating new parameters from all of the properties, because the package configuration override doesn't need to be computed again.
+    private func replacing(activeRunDestination: RunDestinationInfo?, activeArchitecture: String?, overrides: [String: String], commandLineOverrides: [String: String], commandLineConfigOverridesPath: Path?, commandLineConfigOverrides: [String: String], environmentConfigOverridesPath: Path?, environmentConfigOverrides: [String: String]) -> BuildParameters {
+        var parameters = self
+        parameters.activeRunDestination = activeRunDestination
+        parameters.activeArchitecture = activeArchitecture
+        parameters.overrides = overrides
+        parameters.commandLineOverrides = commandLineOverrides
+        parameters.commandLineConfigOverridesPath = commandLineConfigOverridesPath
+        parameters.commandLineConfigOverrides = commandLineConfigOverrides
+        parameters.environmentConfigOverridesPath = environmentConfigOverridesPath
+        parameters.environmentConfigOverrides = environmentConfigOverrides
+        parameters.precomputedHash = parameters.computedHashValue()
+        return parameters
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -241,53 +258,17 @@ public struct BuildParameters: Hashable, SerializableCodable, Sendable {
 
 extension BuildParameters {
     public func mergingOverrides(_ overrides: [String: String]) -> BuildParameters {
-        return BuildParameters(
-            action: action,
-            configuration: configuration,
-            activeRunDestination: activeRunDestination,
-            activeArchitecture: activeArchitecture,
-            overrides: self.overrides.merging(overrides, uniquingKeysWith: { _, new in new }),
-            commandLineOverrides: commandLineOverrides,
-            commandLineConfigOverridesPath: commandLineConfigOverridesPath,
-            commandLineConfigOverrides: commandLineConfigOverrides,
-            environmentConfigOverridesPath: environmentConfigOverridesPath,
-            environmentConfigOverrides: environmentConfigOverrides,
-            toolchainOverride: toolchainOverride,
-            arena: arena)
+        return replacing(activeRunDestination: activeRunDestination, activeArchitecture: activeArchitecture, overrides: self.overrides.merging(overrides, uniquingKeysWith: { _, new in new }), commandLineOverrides: commandLineOverrides, commandLineConfigOverridesPath: commandLineConfigOverridesPath, commandLineConfigOverrides: commandLineConfigOverrides, environmentConfigOverridesPath: environmentConfigOverridesPath, environmentConfigOverrides: environmentConfigOverrides)
     }
 
     // Returns these `BuildParameters` after filtering out any overrides.
     public var withoutOverrides: BuildParameters {
-        return BuildParameters(
-            action: action,
-            configuration: configuration,
-            activeRunDestination: activeRunDestination,
-            activeArchitecture: activeArchitecture,
-            overrides: [:],
-            commandLineOverrides: [:],
-            commandLineConfigOverridesPath: nil,
-            commandLineConfigOverrides: [:],
-            environmentConfigOverridesPath: nil,
-            environmentConfigOverrides: [:],
-            toolchainOverride: toolchainOverride,
-            arena: arena)
+        return replacing(activeRunDestination: activeRunDestination, activeArchitecture: activeArchitecture, overrides: [:], commandLineOverrides: [:], commandLineConfigOverridesPath: nil, commandLineConfigOverrides: [:], environmentConfigOverridesPath: nil, environmentConfigOverrides: [:])
     }
 
     // Returns these `BuildParameters` after modifying `activeRunDestination` and `activeArchitecture`.
     public func replacing(activeRunDestination: RunDestinationInfo?, activeArchitecture: String?) -> BuildParameters {
-        return BuildParameters(
-            action: action,
-            configuration: configuration,
-            activeRunDestination: activeRunDestination,
-            activeArchitecture: activeArchitecture,
-            overrides: overrides,
-            commandLineOverrides: commandLineOverrides,
-            commandLineConfigOverridesPath: commandLineConfigOverridesPath,
-            commandLineConfigOverrides: commandLineConfigOverrides,
-            environmentConfigOverridesPath: environmentConfigOverridesPath,
-            environmentConfigOverrides: environmentConfigOverrides,
-            toolchainOverride: toolchainOverride,
-            arena: arena)
+        return replacing(activeRunDestination: activeRunDestination, activeArchitecture: activeArchitecture, overrides: overrides, commandLineOverrides: commandLineOverrides, commandLineConfigOverridesPath: commandLineConfigOverridesPath, commandLineConfigOverrides: commandLineConfigOverrides, environmentConfigOverridesPath: environmentConfigOverridesPath, environmentConfigOverrides: environmentConfigOverrides)
     }
 
     /// Removes any of the potentially imposed settings **unless** those have been specified via explicit overrides which have come in via the initial build request.
@@ -303,19 +284,7 @@ extension BuildParameters {
             prunedOverrides.removeValue(forKey: setting)
         }
 
-        return BuildParameters(
-            action: action,
-            configuration: configuration,
-            activeRunDestination: activeRunDestination,
-            activeArchitecture: activeArchitecture,
-            overrides: prunedOverrides,
-            commandLineOverrides: commandLineOverrides,
-            commandLineConfigOverridesPath: commandLineConfigOverridesPath,
-            commandLineConfigOverrides: commandLineConfigOverrides,
-            environmentConfigOverridesPath: environmentConfigOverridesPath,
-            environmentConfigOverrides: environmentConfigOverrides,
-            toolchainOverride: toolchainOverride,
-            arena: arena)
+        return replacing(activeRunDestination: activeRunDestination, activeArchitecture: activeArchitecture, overrides: prunedOverrides, commandLineOverrides: commandLineOverrides, commandLineConfigOverridesPath: commandLineConfigOverridesPath, commandLineConfigOverrides: commandLineConfigOverrides, environmentConfigOverridesPath: environmentConfigOverridesPath, environmentConfigOverrides: environmentConfigOverrides)
     }
 }
 

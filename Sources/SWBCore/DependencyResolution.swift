@@ -445,34 +445,6 @@ extension DependencyResolver {
     }
 }
 
-/// A dictionary which can be read and written concurrently, sharded so that concurrent accesses rarely contend.
-final class ConcurrentMemo<Key: Hashable & Sendable, Value: Sendable>: Sendable {
-    private final class Shard: Sendable {
-        let values = SWBMutex<[Key: Value]>([:])
-        // Keep each shard's lock on its own cache line.
-        private let padding: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    }
-
-    private static var shardCount: Int { 32 }
-    private let shards = (0..<ConcurrentMemo.shardCount).map { _ in Shard() }
-
-    /// Returns the value for the key, computing it if needed. The value is computed without holding a lock, so concurrent callers may compute it more than once, but all callers get the first value stored.
-    func getOrInsert(_ key: Key, _ compute: () -> Value) -> Value {
-        let shard = shards[Int(UInt(bitPattern: key.hashValue) % UInt(Self.shardCount))]
-        if let value = shard.values.withLock({ $0[key] }) {
-            return value
-        }
-        let value = compute()
-        return shard.values.withLock { values in
-            if let existing = values[key] {
-                return existing
-            }
-            values[key] = value
-            return value
-        }
-    }
-}
-
 extension SpecializationParameters {
     init(_ configuredTarget: ConfiguredTarget, workspaceContext: WorkspaceContext, buildRequest: BuildRequest, buildRequestContext: BuildRequestContext, makeAggregateTargetsTransparentForSpecialization: Bool) {
         if configuredTarget.target.type == .aggregate && makeAggregateTargetsTransparentForSpecialization {
@@ -552,7 +524,7 @@ extension SpecializationParameters {
     let defaultImposedParameters: SpecializationParameters
 
     /// The memoized specialization parameters of configured targets.
-    nonisolated let specializationParametersByConfiguredTarget = ConcurrentMemo<ConfiguredTarget, SpecializationParameters>()
+    nonisolated let specializationParametersByConfiguredTarget = ShardedRegistry<ConfiguredTarget, SpecializationParameters>()
 
     /// Properties we discover that we want to globally impose on all configurations of a target that are compatible with a specialization.
     /// - remark: The use of `SpecializationParameters` is a convenience since it already supports the matching we want.  We can replace it with a custom matcher for just this purpose if we ever find that it's no longer suitable.

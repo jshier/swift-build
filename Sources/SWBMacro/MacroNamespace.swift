@@ -518,41 +518,8 @@ public final class MacroNamespace: CustomDebugStringConvertible, Encodable, Send
     /// The number of active interning requests. Expressions are interned while this is greater than zero.
     static let activeInterningRequests = Atomic<Int>(0)
 
-    /// The table used for parsed string expression interning.
-    static let stringExpressionInterningTable = ExpressionInterningTable()
-}
-
-/// A table of interned string expressions, which is sharded so that settings can be constructed concurrently without contending on a single lock.
-final class ExpressionInterningTable: Sendable {
-    private final class Shard: Sendable {
-        let expressions = SWBMutex<[String: MacroStringExpression]>([:])
-        // Keep each shard's lock on its own cache line.
-        private let padding: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    }
-
-    private static let shardCount = 64
-    private let shards = (0..<ExpressionInterningTable.shardCount).map { _ in Shard() }
-
-    func getOrInsert(_ string: String, _ create: () -> MacroStringExpression) -> MacroStringExpression {
-        let shard = shards[Int(UInt(bitPattern: string.hashValue) % UInt(Self.shardCount))]
-        if let expression = shard.expressions.withLock({ $0[string] }) {
-            return expression
-        }
-        let expression = create()
-        return shard.expressions.withLock { expressions in
-            if let existing = expressions[string] {
-                return existing
-            }
-            expressions[string] = expression
-            return expression
-        }
-    }
-
-    func removeAll() {
-        for shard in shards {
-            shard.expressions.withLock { $0.removeAll() }
-        }
-    }
+    /// The table used for parsed string expression interning, which is sharded so that settings can be constructed concurrently without contending on a single lock.
+    static let stringExpressionInterningTable = ShardedRegistry<String, MacroStringExpression>()
 }
 
 /// Represents errors that can occur during use of MacroNamespace.

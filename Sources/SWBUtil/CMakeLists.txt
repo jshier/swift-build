@@ -100,6 +100,7 @@ add_library(SWBUtil
   ResponseFiles.swift
   Result.swift
   ScopedKeepAliveCache.swift
+  ShardedRegistry.swift
   Serialization.swift
   Signatures.swift
   Static.swift
