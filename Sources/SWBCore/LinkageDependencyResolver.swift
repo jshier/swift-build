@@ -155,7 +155,7 @@ actor LinkageDependencyResolver {
 
         if visited && configuredTarget.target.type == .aggregate && resolver.makeAggregateTargetsTransparentForSpecialization {
             let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
-            if let imposedParameters = imposedParameters, !imposedParameters.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext) {
+            if let imposedParameters = imposedParameters, !imposedParameters.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
                 resolver.emitUnsupportedAggregateTargetDiagnostic(for: configuredTarget)
             }
         }
@@ -408,7 +408,7 @@ actor LinkageDependencyResolver {
         let nonimposedParameters = configuredTarget.parameters.withoutImposedOverrides(buildRequest, core: workspaceContext.core)
         var candidateDependencySettings = buildRequestContext.getCachedSettings(nonimposedParameters, target: candidateDependencyTarget)
         if let imposedParameters, candidateDependencySettings.enableTargetPlatformSpecialization {
-            candidateDependencySettings = buildRequestContext.getCachedSettings(imposedParameters.imposed(on: nonimposedParameters, workspaceContext: workspaceContext), target: candidateDependencyTarget)
+            candidateDependencySettings = buildRequestContext.getCachedSettings(imposedParameters.imposed(on: nonimposedParameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), target: candidateDependencyTarget)
         }
 
         // Avoid calling `lookupConfiguredTarget()` until after we have verified that the candidate (target, parameters) pair is compatible.

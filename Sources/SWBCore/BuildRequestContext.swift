@@ -91,6 +91,31 @@ public final class BuildRequestContext: Sendable {
         }
     }
 
+    private struct SpecializationSDKRootKey: Hashable, Sendable {
+        let runDestination: RunDestinationInfo?
+        let platformIdentifier: String
+        let canonicalNameSuffix: String?
+    }
+    private struct SpecializationToolchainKey: Hashable, Sendable {
+        let sdkRoot: String
+        let runDestination: RunDestinationInfo?
+    }
+    private struct OptionalValue<Value: Sendable>: Sendable {
+        let value: Value?
+    }
+    private let specializationSDKRootCache = Registry<SpecializationSDKRootKey, OptionalValue<String>>()
+    private let specializationToolchainCache = Registry<SpecializationToolchainKey, OptionalValue<[String]>>()
+
+    /// Returns the SDK root which specialization imposes for a platform, which depends only on the run destination, the platform, and the SDK suffix, memoized for the build request because it looks up SDKs by name.
+    func specializationSDKRoot(runDestination: RunDestinationInfo?, platform: Platform, canonicalNameSuffix: String?, compute: () -> String?) -> String? {
+        specializationSDKRootCache.getOrInsert(SpecializationSDKRootKey(runDestination: runDestination, platformIdentifier: platform.identifier, canonicalNameSuffix: canonicalNameSuffix)) { OptionalValue(value: compute()) }.value
+    }
+
+    /// Returns the toolchains of the SDK with the given name for the run destination, memoized for the build request.
+    func specializationDefaultToolchains(sdkRoot: String, runDestination: RunDestinationInfo?, compute: () -> [String]?) -> [String]? {
+        specializationToolchainCache.getOrInsert(SpecializationToolchainKey(sdkRoot: sdkRoot, runDestination: runDestination)) { OptionalValue(value: compute()) }.value
+    }
+
     public func keepAliveSettingsCache<R>(_ f: () throws -> R) rethrows -> R {
         try workspaceContext.workspaceSettingsCache.keepAlive(f)
     }

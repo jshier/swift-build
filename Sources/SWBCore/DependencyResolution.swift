@@ -171,32 +171,45 @@ struct SpecializationParameters: Hashable, CustomStringConvertible {
         (canonicalNameSuffix != nil ? " suffix: \(String(describing: canonicalNameSuffix))" : "")
     }
 
-    private func effectiveSDKRootOverride(originalParameters: BuildParameters, workspaceContext: WorkspaceContext) -> String? {
+    private func effectiveSDKRootOverride(originalParameters: BuildParameters, workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext) -> String? {
         if let platform {
-            let sdkNameBase: String?
-            if let runDestination = originalParameters.activeRunDestination,
-               let runDestinationSDK = try? workspaceContext.sdkRegistry.lookup(nameOrPath: runDestination.sdk, basePath: Path.root, activeRunDestination: runDestination),
-               Self.platform(forSDK: runDestinationSDK, workspaceContext: workspaceContext) === platform {
-                sdkNameBase = runDestinationSDK.canonicalName
-            } else {
-                sdkNameBase = platform.sdkCanonicalName
-            }
-            if let canonicalNameSuffix, !canonicalNameSuffix.isEmpty, sdkNameBase?.hasSuffix(".\(canonicalNameSuffix)") != true {
-                return sdkNameBase.map { "\($0).\(canonicalNameSuffix)" }
-            } else {
-                return sdkNameBase
+            return buildRequestContext.specializationSDKRoot(runDestination: originalParameters.activeRunDestination, platform: platform, canonicalNameSuffix: canonicalNameSuffix) {
+                computeEffectiveSDKRootOverride(platform: platform, originalParameters: originalParameters, workspaceContext: workspaceContext)
             }
         } else {
             return nil
         }
     }
 
-    private func effectiveToolchainOverride(originalParameters: BuildParameters, workspaceContext: WorkspaceContext) -> [String]? {
+    private func computeEffectiveSDKRootOverride(platform: Platform, originalParameters: BuildParameters, workspaceContext: WorkspaceContext) -> String? {
+        let sdkNameBase: String?
+        if let runDestination = originalParameters.activeRunDestination,
+           let runDestinationSDK = try? workspaceContext.sdkRegistry.lookup(nameOrPath: runDestination.sdk, basePath: Path.root, activeRunDestination: runDestination),
+           Self.platform(forSDK: runDestinationSDK, workspaceContext: workspaceContext) === platform {
+            sdkNameBase = runDestinationSDK.canonicalName
+        } else {
+            sdkNameBase = platform.sdkCanonicalName
+        }
+        if let canonicalNameSuffix, !canonicalNameSuffix.isEmpty, sdkNameBase?.hasSuffix(".\(canonicalNameSuffix)") != true {
+            return sdkNameBase.map { "\($0).\(canonicalNameSuffix)" }
+        } else {
+            return sdkNameBase
+        }
+    }
+
+    private func effectiveToolchainOverride(originalParameters: BuildParameters, workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext) -> [String]? {
         guard let toolchain else { return nil }
 
         // Check if the given toolchain is already the one that would be selected by default and do not impose it if that is the case.
-        let defaultToolchain = effectiveSDKRootOverride(originalParameters: originalParameters, workspaceContext: workspaceContext).map { try? workspaceContext.core.sdkRegistry.lookup($0, activeRunDestination: originalParameters.activeRunDestination)?.toolchains }
-        if (defaultToolchain??.first ?? ToolchainRegistry.defaultToolchainIdentifier) != toolchain.first {
+        var defaultToolchain: String? = nil
+        if let sdkRoot = effectiveSDKRootOverride(originalParameters: originalParameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
+            let toolchains = buildRequestContext.specializationDefaultToolchains(sdkRoot: sdkRoot, runDestination: originalParameters.activeRunDestination) { () -> [String]? in
+                let sdk = try? workspaceContext.core.sdkRegistry.lookup(sdkRoot, activeRunDestination: originalParameters.activeRunDestination)
+                return sdk?.toolchains
+            }
+            defaultToolchain = toolchains?.first
+        }
+        if (defaultToolchain ?? ToolchainRegistry.defaultToolchainIdentifier) != toolchain.first {
             return toolchain
         } else {
             return nil
@@ -204,11 +217,12 @@ struct SpecializationParameters: Hashable, CustomStringConvertible {
     }
 
     /// Check if a configured target can be used when this specialization is required.
-    func isCompatible(with configuredTarget: ConfiguredTarget, settings: Settings, workspaceContext: WorkspaceContext) -> Bool {
-        let toolchain = effectiveToolchainOverride(originalParameters: configuredTarget.parameters, workspaceContext: workspaceContext)
-        return (platform == nil || platform === settings.platform) &&
-        (sdkVariant == nil || sdkVariant?.name == settings.sdkVariant?.name) &&
-        (toolchain == nil || toolchain == settings.toolchains.map(\.identifier)) &&
+    func isCompatible(with configuredTarget: ConfiguredTarget, settings: Settings, workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext) -> Bool {
+        guard (platform == nil || platform === settings.platform) && (sdkVariant == nil || sdkVariant?.name == settings.sdkVariant?.name) else {
+            return false
+        }
+        let toolchain = effectiveToolchainOverride(originalParameters: configuredTarget.parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext)
+        return (toolchain == nil || toolchain == settings.toolchains.map({ $0.identifier })) &&
         (canonicalNameSuffix == nil || canonicalNameSuffix?.nilIfEmpty == settings.sdk?.canonicalNameSuffix)
     }
 
@@ -223,10 +237,10 @@ struct SpecializationParameters: Hashable, CustomStringConvertible {
     }
 
     /// Compute a derived set of build parameters with the specialization imposed on them.
-    func imposed(on parameters: BuildParameters, workspaceContext: WorkspaceContext) -> BuildParameters {
+    func imposed(on parameters: BuildParameters, workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext) -> BuildParameters {
         var overrides = parameters.overrides
 
-        if let imposedSDKRoot = effectiveSDKRootOverride(originalParameters: parameters, workspaceContext: workspaceContext) {
+        if let imposedSDKRoot = effectiveSDKRootOverride(originalParameters: parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
             overrides["SDKROOT"] = imposedSDKRoot
         }
         if let sdkVariant {
@@ -243,7 +257,7 @@ struct SpecializationParameters: Hashable, CustomStringConvertible {
                 overrides["SUPPORTED_PLATFORMS"] = supportedPlatforms.joined(separator: " ")
             }
         }
-        if let toolchain = effectiveToolchainOverride(originalParameters: parameters, workspaceContext: workspaceContext) {
+        if let toolchain = effectiveToolchainOverride(originalParameters: parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
             overrides["TOOLCHAINS"] = toolchain.joined(separator: " ")
         }
         return parameters.mergingOverrides(overrides)
@@ -676,7 +690,7 @@ extension SpecializationParameters {
 
         if settings.enableTargetPlatformSpecialization, let imposedParameters {
             // This is for targets that have SDKROOT set to 'auto' (like Swift Packages) and get settings "imposed" on them.
-            settings = buildRequestContext.getCachedSettings(imposedParameters.imposed(on: filteredParameters, workspaceContext: workspaceContext), target: target)
+            settings = buildRequestContext.getCachedSettings(imposedParameters.imposed(on: filteredParameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), target: target)
         }
 
         guard let targetPlatform = settings.platform else {
@@ -820,7 +834,7 @@ extension SpecializationParameters {
                 if ct.specializeGuidForActiveRunDestination && parameters.activeRunDestination != ct.parameters.activeRunDestination { continue }
                 let parametersWithoutRunDestination = ct.parameters.replacing(activeRunDestination: nil, activeArchitecture: nil)
                 let settings = buildRequestContext.getCachedSettings(parametersWithoutRunDestination, target: ct.target)
-                if specialization.isCompatible(with: ct, settings: settings, workspaceContext: workspaceContext) {
+                if specialization.isCompatible(with: ct, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
                     if imposedParameters?.superimposedProperties != nil {
                         addSuperimposedProperties(for: ct, superimposedProperties: imposedParameters?.superimposedProperties)
                     }
@@ -910,7 +924,7 @@ extension SpecializationParameters {
         let imposedCanonicalNameSuffix: String?
         if shouldImposePlatform {
             let initialFilteredSpecialization = SpecializationParameters(source: .synthesized, platform: imposedPlatform, sdkVariant: imposedSdkVariant, supportedPlatforms: imposedSupportedPlatforms, toolchain: nil, canonicalNameSuffix: nil)
-            let initialSettings = buildRequestContext.getCachedSettings(initialFilteredSpecialization.imposed(on: parameters, workspaceContext: workspaceContext), target: forTarget)
+            let initialSettings = buildRequestContext.getCachedSettings(initialFilteredSpecialization.imposed(on: parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), target: forTarget)
             let specializationSDKOptions = initialSettings.globalScope.evaluate(BuiltinMacros.SPECIALIZATION_SDK_OPTIONS)
             if specializationIsSupported {
                 // If specialization explicitly requires public, but the target itself requires internal, emit an error.
@@ -969,7 +983,7 @@ extension SpecializationParameters {
         let imposedToolchain: [String]?
         if shouldImposePlatform && specializationIsSupported {
             let specializationWithoutToolchainImposition = SpecializationParameters(source: .synthesized, platform: imposedPlatform, sdkVariant: imposedSdkVariant, supportedPlatforms: imposedSupportedPlatforms, toolchain: nil, canonicalNameSuffix: imposedCanonicalNameSuffix)
-            let settingsWithToolchainImposition = buildRequestContext.getCachedSettings(specializationWithoutToolchainImposition.imposed(on: parameters, workspaceContext: workspaceContext), target: forTarget)
+            let settingsWithToolchainImposition = buildRequestContext.getCachedSettings(specializationWithoutToolchainImposition.imposed(on: parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), target: forTarget)
             let configuredToolchains = settingsWithToolchainImposition.toolchains.map({ $0.identifier })
             if let specializedToolchains = specialization.toolchain, configuredToolchains == specializedToolchains {
                 imposedToolchain = nil
@@ -989,11 +1003,11 @@ extension SpecializationParameters {
         // FIXME: rdar://80907686 (BuildParameters are ConfiguredTargets is problematic)
         // Ideally, this code shouldn't live here, but there are issues tracked in (rdar://80907686) that we need to work through.
         if settings.enableTargetPlatformSpecialization || settings.enableBuildRequestOverrides || fromPackage {
-            return lookupConfiguredTarget(forTarget, parameters: filteredSpecialization.imposed(on: parameters, workspaceContext: workspaceContext), superimposedProperties: filteredSpecialization.superimposedProperties)
+            return lookupConfiguredTarget(forTarget, parameters: filteredSpecialization.imposed(on: parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), superimposedProperties: filteredSpecialization.superimposedProperties)
         }
         else {
             let nonimposedParameters = fromPackage ? parameters : parameters.withoutImposedOverrides(buildRequest, core: workspaceContext.core)
-            return lookupConfiguredTarget(forTarget, parameters: filteredSpecialization.imposed(on: nonimposedParameters, workspaceContext: workspaceContext), superimposedProperties: filteredSpecialization.superimposedProperties)
+            return lookupConfiguredTarget(forTarget, parameters: filteredSpecialization.imposed(on: nonimposedParameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), superimposedProperties: filteredSpecialization.superimposedProperties)
         }
     }
 
@@ -1001,10 +1015,19 @@ extension SpecializationParameters {
     @_spi(Testing) public nonisolated func explicitDependencies(for configuredTarget: ConfiguredTarget) -> [Target] {
         let scope = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target).globalScope
 
-        let filteringContext = TargetDependencyFilteringContext(
-            currentPlatformFilter: PlatformFilter(scope),
-            currentBuildConfigurationFilter: BuildConfigurationFilter(scope)
-        )
+        // The filters are only needed by dependencies which have filters, and the platform filter is relatively expensive to compute, so compute them only if needed.
+        var _filteringContext: TargetDependencyFilteringContext? = nil
+        func filteringContext() -> TargetDependencyFilteringContext {
+            if let _filteringContext {
+                return _filteringContext
+            }
+            let filteringContext = TargetDependencyFilteringContext(
+                currentPlatformFilter: PlatformFilter(scope),
+                currentBuildConfigurationFilter: BuildConfigurationFilter(scope)
+            )
+            _filteringContext = filteringContext
+            return filteringContext
+        }
         let excludedExplicitDependencies = scope.evaluate(BuiltinMacros.EXCLUDED_EXPLICIT_TARGET_DEPENDENCIES)
         let includedExplicitDependencies = scope.evaluate(BuiltinMacros.INCLUDED_EXPLICIT_TARGET_DEPENDENCIES)
 
@@ -1024,13 +1047,13 @@ extension SpecializationParameters {
         }
 
         return configuredTarget.target.dependencies.compactMap { dependency in
-            if !filteringContext.currentPlatformFilter.matches(dependency.platformFilters) {
-                emitSkippedTargetDependencyDiagnostic(.platformFilter, filteringContext, configuredTarget, dependency)
+            if !dependency.platformFilters.isEmpty, !filteringContext().currentPlatformFilter.matches(dependency.platformFilters) {
+                emitSkippedTargetDependencyDiagnostic(.platformFilter, filteringContext(), configuredTarget, dependency)
                 return nil
             }
 
-            if !filteringContext.currentBuildConfigurationFilter.matches(dependency.buildConfigurationFilters) {
-                emitSkippedTargetDependencyDiagnostic(.buildConfigurationFilter, filteringContext, configuredTarget, dependency)
+            if !dependency.buildConfigurationFilters.isEmpty, !filteringContext().currentBuildConfigurationFilter.matches(dependency.buildConfigurationFilters) {
+                emitSkippedTargetDependencyDiagnostic(.buildConfigurationFilter, filteringContext(), configuredTarget, dependency)
                 return nil
             }
 
@@ -1038,14 +1061,14 @@ extension SpecializationParameters {
                 // If a target has a direct dependency GUID which is missing, then it is silently skipped.
                 //
                 // FIXME: We should probably emit a hard error here for package dependencies.
-                emitSkippedTargetDependencyDiagnostic(.notFound, filteringContext, configuredTarget, dependency)
+                emitSkippedTargetDependencyDiagnostic(.notFound, filteringContext(), configuredTarget, dependency)
                 return nil
             }
 
             let actualTarget = workspaceContext.workspace.dynamicTarget(for: target, dynamicallyBuildingTargets: dynamicallyBuildingTargets)
 
             if isExcludedByName(actualTarget.name) {
-                emitSkippedTargetDependencyDiagnostic(.excludedTargetDependency, filteringContext, configuredTarget, dependency)
+                emitSkippedTargetDependencyDiagnostic(.excludedTargetDependency, filteringContext(), configuredTarget, dependency)
                 return nil
             }
 

@@ -471,7 +471,7 @@ fileprivate extension TargetDependencyResolver {
                 var overridesToApply = [String: String]()
                 let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
                 for specialization in allSuperimposedSpecializations {
-                    if let superimposedProperties = specialization.superimposedProperties, specialization.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext) {
+                    if let superimposedProperties = specialization.superimposedProperties, specialization.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
                         // At this point we have some properties to apply to a target which is compatible with our specialization, so we add them to the overrides to apply.  This unifies overrides from potentially multiple specializations.
                         overridesToApply.addContents(of: superimposedProperties.overrides(configuredTarget, settings))
                     }
@@ -526,7 +526,7 @@ fileprivate extension TargetDependencyResolver {
 
                     // Check if any of the unsuffixed targets are incompatible with parameters other than whether the suffixed SDK is being used.
                     let incompatibleTargets = configuredTargets.filter {
-                        return $0 != suffixedTarget && !parameters.isCompatible(with: $0, settings: settingsForConfiguredTarget[$0]!, workspaceContext: workspaceContext)
+                        return $0 != suffixedTarget && !parameters.isCompatible(with: $0, settings: settingsForConfiguredTarget[$0]!, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext)
                     }
 
                     // If no targets are incompatible, remove the unnecessary targets from the build graph.
@@ -749,7 +749,7 @@ fileprivate extension TargetDependencyResolver {
 
         if visited && configuredTarget.target.type == .aggregate && resolver.makeAggregateTargetsTransparentForSpecialization {
             let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
-            if let imposedParameters = imposedParameters, !imposedParameters.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext) {
+            if let imposedParameters = imposedParameters, !imposedParameters.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
                 resolver.emitUnsupportedAggregateTargetDiagnostic(for: configuredTarget)
             }
         }
@@ -818,7 +818,7 @@ fileprivate extension TargetDependencyResolver {
 
         // Get the discovered target info, or create it if necessary (for targets not visited in the initial discovery, or when specialization has become active).
         let discoveredInfo: DiscoveredTargetInfo
-        if let info = discoveredTargets[configuredTarget], imposedParameters == nil || imposedParameters?.isCompatible(with: configuredTarget, settings: buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target), workspaceContext: workspaceContext) == true {
+        if let info = discoveredTargets[configuredTarget], imposedParameters == nil || imposedParameters?.isCompatible(with: configuredTarget, settings: buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target), workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) == true {
             discoveredInfo = info
         } else {
             if resolver.makeAggregateTargetsTransparentForSpecialization {
