@@ -626,7 +626,8 @@ extension SpecializationParameters {
 
     /// Add the superimposed overrides in `specialization` to be imposed on the target in `configuredTarget` and other instances of that target which match this `configuredTarget`.
     func addSuperimposedProperties(for configuredTarget: ConfiguredTarget, superimposedProperties: SuperimposedProperties?) {
-        guard let superimposedProperties else {
+        // Superimposed properties which don't merge the target don't override any settings, so there's nothing to impose.
+        guard let superimposedProperties, superimposedProperties.mergeableLibrary else {
             return
         }
         // Create SpecializationParameters for the purpose of matching targets to which these properties should be applied when postprocessing the dependency graph
