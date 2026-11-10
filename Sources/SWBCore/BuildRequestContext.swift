@@ -14,6 +14,7 @@ public import SWBProtocol
 public import SWBUtil
 public import SWBMacro
 import Foundation
+import Synchronization
 
 /// Encapsulates the context relevant to the work needed to construct a build description for an incoming build request.
 ///
@@ -26,6 +27,17 @@ public final class BuildRequestContext: Sendable {
     }
 
     private let filesSignatureCache = Registry<[Path], Lazy<FilesSignature>>()
+
+    private let _settingsConstructionCount = Atomic<Int>(0)
+
+    /// The number of settings constructed for this build request, as opposed to found in the cache.
+    package var settingsConstructionCount: Int {
+        _settingsConstructionCount.load(ordering: .relaxed)
+    }
+
+    func noteSettingsConstruction() {
+        _settingsConstructionCount.add(1, ordering: .relaxed)
+    }
 
     /// Gets the file signature for the specified set of paths. This is cached for the lifetime of the build request.
     private func filesSignature(for paths: [Path]) -> FilesSignature {

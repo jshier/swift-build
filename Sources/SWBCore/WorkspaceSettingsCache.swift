@@ -85,6 +85,7 @@ final class WorkspaceSettingsCache: Sendable {
 
         // Check if there were any changes in used xcconfigs
         return settingsCache.getOrInsert(key, isValid: { settings in filesSignature(settings.inputPathsAffectingSettings) == settings.inputPathsAffectingSettingsSignature }) {
+            buildRequestContext.noteSettingsConstruction()
             let settingsContext = SettingsContext(.build, project: nil, target: nil)
             return Settings(workspaceContext: workspaceContext, buildRequestContext: buildRequestContext, parameters: parameters, settingsContext: settingsContext, purpose: purpose, provisioningTaskInputs: nil, impartedBuildProperties: nil)
         }
@@ -98,7 +99,8 @@ final class WorkspaceSettingsCache: Sendable {
 
         // Check if there were any changes in used xcconfigs
         return settingsCache.getOrInsert(key, isValid: { settings in filesSignature(settings.inputPathsAffectingSettings) == settings.inputPathsAffectingSettingsSignature }) {
-            Settings(workspaceContext: workspaceContext, buildRequestContext: buildRequestContext, parameters: parameters, project: project, target: target, purpose: purpose, provisioningTaskInputs: provisioningTaskInputs, impartedBuildProperties: impartedBuildProperties, artifactBundleInfo: artifactBundleInfo, compilationCachingInfo: compilationCachingInfo)
+            buildRequestContext.noteSettingsConstruction()
+            return Settings(workspaceContext: workspaceContext, buildRequestContext: buildRequestContext, parameters: parameters, project: project, target: target, purpose: purpose, provisioningTaskInputs: provisioningTaskInputs, impartedBuildProperties: impartedBuildProperties, artifactBundleInfo: artifactBundleInfo, compilationCachingInfo: compilationCachingInfo)
         }
     }
 

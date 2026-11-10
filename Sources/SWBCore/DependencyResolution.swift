@@ -533,6 +533,9 @@ extension SpecializationParameters {
         }
     }
 
+    /// The memoized results of `isTargetSuitableForPlatformForIndex`.
+    private nonisolated let indexSuitability = ShardedRegistry<IndexSuitabilityKey, Bool>()
+
     /// The memoized specialization parameters of configured targets.
     nonisolated let specializationParametersByConfiguredTarget = ShardedRegistry<ConfiguredTarget, SpecializationParameters>()
 
@@ -713,6 +716,19 @@ extension SpecializationParameters {
             return true
         }
 
+        // This is checked for each platform for each target, and for each dependency on a target, so memoize it.
+        return indexSuitability.getOrInsert(IndexSuitabilityKey(target: ObjectIdentifier(target), parameters: parameters, imposedParameters: imposedParameters)) {
+            computeIsTargetSuitableForPlatformForIndex(target, parameters: parameters, imposedParameters: imposedParameters)
+        }
+    }
+
+    private struct IndexSuitabilityKey: Hashable, Sendable {
+        let target: ObjectIdentifier
+        let parameters: BuildParameters
+        let imposedParameters: SpecializationParameters?
+    }
+
+    private nonisolated func computeIsTargetSuitableForPlatformForIndex(_ target: Target, parameters: BuildParameters, imposedParameters: SpecializationParameters?) -> Bool {
         guard let runDestination = parameters.activeRunDestination else { return false }
 
         // Filter any overrides from the parameters, because they can shadow any original "auto" values.

@@ -425,12 +425,22 @@ fileprivate extension TargetDependencyResolver {
         }
 
         // First, compute the settings that resolution needs concurrently, then resolve the graph in a single traversal, which discovers each target's dependencies, configures them with specialization parameters, and adds them to the dependency closure.
+        // The settings of the targets in a graph are computed, and expire, together, so if looking up the first top-level target doesn't construct any settings, those of the rest of the graph are most likely cached. Otherwise, compute the settings that looking up the top-level targets, and then resolving the graph, need concurrently. Debug activity logs would report the targets visited speculatively.
+        let warmUp = SettingsWarmUp(resolver: resolver)
+        var settingsAreCached = true
+        if let firstTarget = buildRequest.buildTargets.first, !workspaceContext.userPreferences.enableDebugActivityLogs {
+            let settingsConstructionCount = buildRequestContext.settingsConstructionCount
+            _ = buildRequestContext.getCachedSettings(firstTarget.parameters, target: firstTarget.target)
+            settingsAreCached = buildRequestContext.settingsConstructionCount == settingsConstructionCount
+            if !settingsAreCached {
+                await warmUp.warmUpTopLevelLookups(buildRequest.buildTargets)
+            }
+        }
         let topLevelTargetsToDiscover = await resolver.concurrentMap(maximumParallelism: 100, buildRequest.buildTargets) { [resolver] in
             await resolver.lookupTopLevelConfiguredTarget($0)
         }
-        // Compute the settings concurrently while resolving, so that resolution waits only for settings which haven't been computed yet. Debug activity logs would report the targets visited speculatively.
         let settingsWarmUp: Task<Void, Never>?
-        if !topLevelTargetsToDiscover.isEmpty && !workspaceContext.userPreferences.enableDebugActivityLogs, case let warmUp = SettingsWarmUp(resolver: resolver), !warmUp.settingsAreProbablyCached(topLevelTargets: topLevelTargetsToDiscover) {
+        if !topLevelTargetsToDiscover.isEmpty && !settingsAreCached {
             settingsWarmUp = Task.detached(priority: Task.currentPriority) {
                 await warmUp.warmUp(topLevelTargets: topLevelTargetsToDiscover)
             }
@@ -945,14 +955,44 @@ private final class SettingsWarmUp: Sendable {
     private var buildRequest: BuildRequest { resolver.buildRequest }
     private var buildRequestContext: BuildRequestContext { resolver.buildRequestContext }
 
-    /// Whether the settings of the graph are probably cached already, in which case visiting the graph would only slow resolution down.
-    ///
-    /// The settings of the targets in a graph are computed, and expire, together, so this checks whether the settings without overrides of a dependency of a top-level target are cached, which only resolving the graph computes. (The settings of the top-level targets themselves are computed when they're looked up.)
-    func settingsAreProbablyCached(topLevelTargets: [ConfiguredTarget]) -> Bool {
-        guard let configuredTarget = topLevelTargets.first, let dependency = resolver.explicitDependencies(for: configuredTarget).first else {
-            return false
+    /// Computes the settings that looking up the top-level configured targets needs, which for an index workspace description is each target for each platform.
+    func warmUpTopLevelLookups(_ buildTargets: [BuildRequest.BuildTargetInfo]) async {
+        await withTaskGroup(of: Void.self) { group in
+            for targetInfo in buildTargets {
+                group.addTask {
+                    self.warmUpTopLevelLookup(targetInfo)
+                }
+            }
         }
-        return buildRequestContext.hasCachedSettings(configuredTarget.parameters.withoutOverrides, target: dependency)
+    }
+
+    /// Computes the settings needed by `DependencyResolver.lookupTopLevelConfiguredTarget()`, following it.
+    private func warmUpTopLevelLookup(_ targetInfo: BuildRequest.BuildTargetInfo) {
+        let target = targetInfo.target
+        guard buildRequest.buildsIndexWorkspaceDescription else {
+            let predicted = predictedConfiguredTarget(target, parameters: targetInfo.parameters, specialization: resolver.defaultImposedParameters)
+            _ = buildRequestContext.getCachedSettings(predicted.parameters, target: predicted.target)
+            return
+        }
+        guard target.type != .aggregate else {
+            return
+        }
+        let unconfiguredSupportedPlatforms = buildRequestContext.getCachedSettings(targetInfo.parameters, target: target).globalScope.evaluate(BuiltinMacros.SUPPORTED_PLATFORMS)
+        let isHostBuildTool = (target as? StandardTarget).map { ProductTypeIdentifier($0.productTypeIdentifier).isHostBuildTool } ?? false
+        for platformParams in resolver.platformBuildParametersForIndex {
+            if platformParams.buildParams.activeRunDestination?.isMacCatalyst == true {
+                if isHostBuildTool {
+                    continue
+                }
+            } else if let platformName = platformParams.buildParams.activeRunDestination?.platform, unconfiguredSupportedPlatforms.count > 0, !unconfiguredSupportedPlatforms.contains(platformName) {
+                continue
+            }
+            guard resolver.isTargetSuitableForPlatformForIndex(target, parameters: platformParams.buildParams, imposedParameters: platformParams.specializationParams) else {
+                continue
+            }
+            let predicted = predictedConfiguredTarget(target, parameters: platformParams.buildParams, specialization: platformParams.specializationParams)
+            _ = buildRequestContext.getCachedSettings(predicted.parameters, target: predicted.target)
+        }
     }
 
     func warmUp(topLevelTargets: [ConfiguredTarget]) async {
