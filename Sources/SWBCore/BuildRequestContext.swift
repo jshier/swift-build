@@ -139,6 +139,11 @@ public final class BuildRequestContext: Sendable {
         getCachedSettings(parameters, project: workspaceContext.workspace.project(for: target), target: target, purpose: purpose, provisioningTaskInputs: provisioningTaskInputs, impartedBuildProperties: impartedBuildProperties, artifactBundleInfo: artifactBundleInfo, compilationCachingInfo: compilationCachingInfo)
     }
 
+    /// Whether the settings for the given parameters and target are cached, or being computed, without computing them.
+    package func hasCachedSettings(_ parameters: BuildParameters, target: Target) -> Bool {
+        workspaceContext.workspaceSettingsCache.hasCachedSettings(parameters, project: workspaceContext.workspace.project(for: target), target: target)
+    }
+
     /// Get the cached platform, SDK, SDK variant, and toolchains of the settings for the given parameters and target, which are cheaper to compute than the settings.
     package func getCachedBoundPlatformProperties(_ parameters: BuildParameters, target: Target) -> Settings.BoundPlatformProperties {
         workspaceContext.workspaceSettingsCache.getCachedBoundPlatformProperties(parameters, project: workspaceContext.workspace.project(for: target), target: target, buildRequestContext: self, filesSignature: filesSignature(for:))

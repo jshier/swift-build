@@ -428,9 +428,14 @@ fileprivate extension TargetDependencyResolver {
         let topLevelTargetsToDiscover = await resolver.concurrentMap(maximumParallelism: 100, buildRequest.buildTargets) { [resolver] in
             await resolver.lookupTopLevelConfiguredTarget($0)
         }
-        // Debug activity logs would report the targets visited speculatively.
-        if !topLevelTargetsToDiscover.isEmpty && !workspaceContext.userPreferences.enableDebugActivityLogs {
-            await SettingsWarmUp(resolver: resolver).warmUp(topLevelTargets: topLevelTargetsToDiscover)
+        // Compute the settings concurrently while resolving, so that resolution waits only for settings which haven't been computed yet. Debug activity logs would report the targets visited speculatively.
+        let settingsWarmUp: Task<Void, Never>?
+        if !topLevelTargetsToDiscover.isEmpty && !workspaceContext.userPreferences.enableDebugActivityLogs, case let warmUp = SettingsWarmUp(resolver: resolver), !warmUp.settingsAreProbablyCached(topLevelTargets: topLevelTargetsToDiscover) {
+            settingsWarmUp = Task.detached(priority: Task.currentPriority) {
+                await warmUp.warmUp(topLevelTargets: topLevelTargetsToDiscover)
+            }
+        } else {
+            settingsWarmUp = nil
         }
 
         // Go through the build requests's top-level configured targets.  For each one we ask it to add its dependencies and then itself to the dependency closure.
@@ -442,6 +447,10 @@ fileprivate extension TargetDependencyResolver {
             var dependencyPath = OrderedSet<ConfiguredTarget>()
             await self.addDependencies(forConfiguredTarget: topLevelConfiguredTarget, toDependencyClosure: &allTargets, dependencyPath: &dependencyPath)
         }
+
+        // The settings which haven't been computed yet won't be needed.
+        settingsWarmUp?.cancel()
+        await settingsWarmUp?.value
 
         for target in allTargets {
             // we don't want to stop too early (when we are computing the dependency graph) because this prevents us from getting better diagnostics later on, when it matters.
@@ -921,7 +930,7 @@ fileprivate extension TargetDependencyResolver {
     }
 }
 
-/// Computes, concurrently, the settings that resolving the dependency graph will need, so that the serial resolution finds them cached.
+/// Computes, concurrently, the settings that resolving the dependency graph will need, so that the serial resolution finds them cached, or being computed.
 ///
 /// Settings are the most expensive part of resolution, and they're computed on demand and cached for the build request, so computing them beforehand doesn't change the result. This visits the targets in the graph speculatively: it predicts the configured target for each dependency without the configured targets created so far, which resolution prefers if they're compatible. Where the prediction differs from the configured target resolution chooses, resolution computes the remaining settings itself.
 private final class SettingsWarmUp: Sendable {
@@ -935,6 +944,16 @@ private final class SettingsWarmUp: Sendable {
     private var workspaceContext: WorkspaceContext { resolver.workspaceContext }
     private var buildRequest: BuildRequest { resolver.buildRequest }
     private var buildRequestContext: BuildRequestContext { resolver.buildRequestContext }
+
+    /// Whether the settings of the graph are probably cached already, in which case visiting the graph would only slow resolution down.
+    ///
+    /// The settings of the targets in a graph are computed, and expire, together, so this checks whether the settings without overrides of a dependency of a top-level target are cached, which only resolving the graph computes. (The settings of the top-level targets themselves are computed when they're looked up.)
+    func settingsAreProbablyCached(topLevelTargets: [ConfiguredTarget]) -> Bool {
+        guard let configuredTarget = topLevelTargets.first, let dependency = resolver.explicitDependencies(for: configuredTarget).first else {
+            return false
+        }
+        return buildRequestContext.hasCachedSettings(configuredTarget.parameters.withoutOverrides, target: dependency)
+    }
 
     func warmUp(topLevelTargets: [ConfiguredTarget]) async {
         await withTaskGroup(of: Void.self) { group in
