@@ -810,6 +810,26 @@ public final class Settings: PlatformBuildContext, TripleLookup, Sendable {
         return scope.evaluate(BuiltinMacros.ALLOW_BUILD_REQUEST_OVERRIDES)
     }
 
+    /// The platform, SDK, SDK variant, and toolchains of the settings for a project and optionally a target, which are computed before, and without, the rest of the settings.
+    package struct BoundPlatformProperties: Sendable {
+        package let platform: Platform?
+        package let sdk: SDK?
+        package let sdkVariant: SDKVariant?
+        package let toolchains: [Toolchain]
+        let inputPathsAffectingSettings: [Path]
+        let inputPathsAffectingSettingsSignature: FilesSignature
+    }
+
+    /// Computes the platform, SDK, SDK variant, and toolchains which the settings for the given parameters, project, and target have, without computing the settings.
+    static func boundPlatformProperties(workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext, parameters: BuildParameters, project: Project, target: Target?) -> BoundPlatformProperties {
+        // This matches the computation of the bound properties in `SettingsBuilder.construct()`.
+        let builder = SettingsBuilder(workspaceContext, buildRequestContext, parameters, SettingsContext(.build, project: project, target: target), forBindingProperties: true, nil)
+        let effectiveProjectConfig = project.getEffectiveConfiguration(parameters.configuration, packageConfigurationOverride: parameters.packageConfigurationOverride)
+        let targetConfiguration = target?.getEffectiveConfiguration(parameters.configuration, defaultConfigurationName: project.isPackage ? (parameters.packageConfigurationOverride ?? project.defaultConfigurationName) : project.defaultConfigurationName)
+        let boundProperties = MacroNamespace.withExpressionInterningEnabled { builder.computeBoundProperties(effectiveProjectConfig, targetConfiguration) }
+        return BoundPlatformProperties(platform: boundProperties.platform, sdk: boundProperties.sdk, sdkVariant: boundProperties.sdkVariant, toolchains: boundProperties.toolchains, inputPathsAffectingSettings: builder.inputPathsAffectingSettings.elements, inputPathsAffectingSettingsSignature: builder.inputPathsAffectingSettingsSignature)
+    }
+
     /// Structure to hold information about the project model components from which a settings object was constructed.
     ///
     /// - remark: The overhead of this object should be very small, because the majority of the actual data are the linked lists of macro definitions, which are shared with the main table in the `Settings` object.

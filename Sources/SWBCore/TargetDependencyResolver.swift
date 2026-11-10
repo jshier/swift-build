@@ -14,6 +14,7 @@ public import SWBUtil
 public import struct SWBProtocol.TargetDescription
 public import struct SWBProtocol.TargetDependencyRelationship
 import SWBMacro
+import Synchronization
 
 /// This enumeration is used to describe the reason a dependency exists between a target and the target that depends on it, for reporting purposes.
 public enum TargetDependencyReason: Sendable {
@@ -280,7 +281,8 @@ fileprivate extension TargetDependencyResolver {
             linkageDependencyResolver = nil
         }
 
-        self.resolver = DependencyResolver(workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, delegate: delegate)
+        // The settings that resolution needs are computed concurrently beforehand (see `SettingsWarmUp`), so resolution itself is serial, which makes it deterministic.
+        self.resolver = DependencyResolver(workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, delegate: delegate, concurrent: false)
         self.purpose = purpose
     }
 
@@ -432,6 +434,10 @@ fileprivate extension TargetDependencyResolver {
             await resolver.lookupTopLevelConfiguredTarget($0)
         }
         if !topLevelTargetsToDiscover.isEmpty {
+            // Debug activity logs would report the targets visited speculatively.
+            if !workspaceContext.userPreferences.enableDebugActivityLogs {
+                await SettingsWarmUp(resolver: resolver).warmUp(topLevelTargets: topLevelTargetsToDiscover)
+            }
             await resolver.concurrentPerform(iterations: topLevelTargetsToDiscover.count, maximumParallelism: 100) { [self] i in
                 if Task.isCancelled { return }
                 let configuredTarget = topLevelTargetsToDiscover[i]
@@ -950,5 +956,115 @@ fileprivate extension TargetDependencyResolver {
         }
 
         return DiscoveredTargetInfo(immediateDependencies: immediateDependencies, packageProductDependencies: packageProductDependencies)
+    }
+}
+
+/// Computes, concurrently, the settings that resolving the dependency graph will need, so that the serial resolution finds them cached.
+///
+/// Settings are the most expensive part of resolution, and they're computed on demand and cached for the build request, so computing them beforehand doesn't change the result. This visits the targets in the graph speculatively: it predicts the configured target for each dependency without the configured targets created so far, which resolution prefers if they're compatible. Where the prediction differs from the configured target resolution chooses, resolution computes the remaining settings itself.
+private final class SettingsWarmUp: Sendable {
+    let resolver: DependencyResolver
+    private let visited = SWBMutex<Set<ConfiguredTarget>>([])
+
+    init(resolver: DependencyResolver) {
+        self.resolver = resolver
+    }
+
+    private var workspaceContext: WorkspaceContext { resolver.workspaceContext }
+    private var buildRequest: BuildRequest { resolver.buildRequest }
+    private var buildRequestContext: BuildRequestContext { resolver.buildRequestContext }
+
+    func warmUp(topLevelTargets: [ConfiguredTarget]) async {
+        await withTaskGroup(of: Void.self) { group in
+            // Looking up the configured target for a dependency uses its settings without overrides, which don't depend on the targets depending on it, so compute them for all targets which may be in the graph without waiting for the targets depending on them.
+            if !buildRequest.buildsIndexWorkspaceDescription {
+                let parameters = buildRequest.parameters.withoutOverrides
+                for target in Self.targetClosure(topLevelTargets.map(\.target), workspace: workspaceContext.workspace, dynamicallyBuildingTargets: resolver.dynamicallyBuildingTargets) {
+                    group.addTask {
+                        _ = self.buildRequestContext.getCachedSettings(parameters, target: target)
+                    }
+                }
+            }
+            for configuredTarget in topLevelTargets {
+                group.addTask {
+                    await self.visit(configuredTarget, imposedParameters: nil)
+                }
+            }
+        }
+    }
+
+    /// The targets reachable from the given targets through their explicit dependencies, regardless of the filters on them.
+    private static func targetClosure(_ targets: [Target], workspace: Workspace, dynamicallyBuildingTargets: Set<Target>) -> [Target] {
+        var visited = Set<Target>()
+        var result = [Target]()
+        var stack = targets
+        while let target = stack.popLast() {
+            let target = workspace.dynamicTarget(for: target, dynamicallyBuildingTargets: dynamicallyBuildingTargets)
+            guard visited.insert(target).inserted else { continue }
+            result.append(target)
+            for dependency in target.dependencies {
+                if let dependencyTarget = workspace.target(for: dependency.guid) {
+                    stack.append(dependencyTarget)
+                }
+            }
+        }
+        return result
+    }
+
+    /// The specialization parameters which resolution imposes on the dependencies of a configured target.
+    private func specializationParameters(_ configuredTarget: ConfiguredTarget) -> SpecializationParameters {
+        resolver.specializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
+    }
+
+    /// Predicts the configured target which resolution looks up for `target` with the given parameters and specialization, and computes the settings the lookup needs.
+    private func predictedConfiguredTarget(_ target: Target, parameters: BuildParameters, specialization: SpecializationParameters?) -> ConfiguredTarget {
+        var parameters = parameters
+        if let specialization {
+            let lookupParameters = resolver.parametersForSpecializedLookup(target, parameters: parameters)
+            parameters = resolver.specializedConfiguration(target, parameters: lookupParameters, specialization: specialization, emitDiagnostics: false).parameters
+        }
+        let dynamicTarget = workspaceContext.workspace.dynamicTarget(for: target, dynamicallyBuildingTargets: resolver.dynamicallyBuildingTargets)
+        // Looking up a configured target compares the existing ones with the settings of the target without overrides.
+        _ = buildRequestContext.getCachedSettings(parameters.withoutOverrides, target: dynamicTarget)
+        return ConfiguredTarget(parameters: parameters, target: dynamicTarget, specializeGuidForActiveRunDestination: buildRequest.buildsIndexWorkspaceDescription)
+    }
+
+    private func visit(_ configuredTarget: ConfiguredTarget, imposedParameters: SpecializationParameters?) async {
+        guard visited.withLock({ $0.insert(configuredTarget).inserted }), !Task.isCancelled else {
+            return
+        }
+
+        // Later lookups of the target check whether this configured target is compatible with their specialization, using the platform properties of its settings without a run destination.
+        if configuredTarget.parameters.activeRunDestination != nil || configuredTarget.parameters.activeArchitecture != nil {
+            _ = buildRequestContext.getCachedBoundPlatformProperties(configuredTarget.parameters.replacing(activeRunDestination: nil, activeArchitecture: nil), target: configuredTarget.target)
+        }
+        let imposedParameters = imposedParameters ?? specializationParameters(configuredTarget)
+
+        var dependencies = [(ConfiguredTarget, SpecializationParameters?)]()
+        for dependency in resolver.explicitDependencies(for: configuredTarget) {
+            let buildParameters = resolver.buildParametersByTarget[dependency] ?? configuredTarget.parameters
+            if dependency is PackageProductTarget {
+                // Package products are configured with the specialization of the target depending on them.
+                dependencies.append((predictedConfiguredTarget(dependency, parameters: buildParameters, specialization: imposedParameters), nil))
+                continue
+            }
+            if !resolver.isTargetSuitableForPlatformForIndex(dependency, parameters: configuredTarget.parameters, imposedParameters: imposedParameters) {
+                continue
+            }
+            // Looking up a compatible configured target for a dependency uses the settings of the dependency without overrides.
+            _ = buildRequestContext.getCachedSettings(configuredTarget.parameters.withoutOverrides, target: dependency)
+            let predicted = predictedConfiguredTarget(dependency, parameters: buildParameters, specialization: imposedParameters)
+            // Aggregate targets are transparent for specialization.
+            let dependencyImposedParameters = resolver.makeAggregateTargetsTransparentForSpecialization && dependency.type == .aggregate ? imposedParameters : nil
+            dependencies.append((predicted, dependencyImposedParameters))
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            for (dependency, dependencyImposedParameters) in dependencies {
+                group.addTask {
+                    await self.visit(dependency, imposedParameters: dependencyImposedParameters)
+                }
+            }
+        }
     }
 }

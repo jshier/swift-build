@@ -100,15 +100,29 @@ final class WorkspaceSettingsCache: Sendable {
         }
     }
 
+    /// Get the cached platform, SDK, SDK variant, and toolchains of the settings for the given parameters, project, and target, which can be computed without the rest of the settings.
+    internal func getCachedBoundPlatformProperties(_ parameters: BuildParameters, project: Project, target: Target?, buildRequestContext: BuildRequestContext, filesSignature: ([Path]) -> FilesSignature) -> Settings.BoundPlatformProperties {
+        let key = SettingsCacheKey(parameters: parameters, projectGUID: project.guid, targetGUID: target?.guid, purpose: .build, provisioningTaskInputs: nil, impartedBuildProperties: nil, artifactBundleInfo: nil, compilationCachingInfo: nil)
+        return boundPlatformPropertiesCache.getOrInsert(key, isValid: { properties in filesSignature(properties.inputPathsAffectingSettings) == properties.inputPathsAffectingSettingsSignature }) {
+            Settings.boundPlatformProperties(workspaceContext: workspaceContext, buildRequestContext: buildRequestContext, parameters: parameters, project: project, target: target)
+        }
+    }
+
+    private let boundPlatformPropertiesCache = ScopedKeepAliveCache(HeavyCache<SettingsCacheKey, Lazy<Settings.BoundPlatformProperties>>(timeToLive: Tuning.workspaceSettingsCacheTTL))
+
     /// We use a `Lazy` as the value type to allow concurrent settings construction while still ensuring we only ever construct the settings for a particular configuration once, e.g. concurrent access to already constructed settings as well as concurrent setting construction.
     private let settingsCache = ScopedKeepAliveCache(HeavyCache<SettingsCacheKey, Lazy<Settings>>(timeToLive: Tuning.workspaceSettingsCacheTTL))
 
     func keepAlive<R>(_ f: () throws -> R) rethrows -> R {
-        try settingsCache.keepAlive(f)
+        try settingsCache.keepAlive {
+            try boundPlatformPropertiesCache.keepAlive(f)
+        }
     }
 
     func keepAlive<R>(_ f: () async throws -> R) async rethrows -> R {
-        try await settingsCache.keepAlive(f)
+        try await settingsCache.keepAlive {
+            try await boundPlatformPropertiesCache.keepAlive(f)
+        }
     }
 
     /// Get the cached parse information for an `xcconfig` file.

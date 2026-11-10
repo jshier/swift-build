@@ -218,12 +218,17 @@ struct SpecializationParameters: Hashable, CustomStringConvertible {
 
     /// Check if a configured target can be used when this specialization is required.
     func isCompatible(with configuredTarget: ConfiguredTarget, settings: Settings, workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext) -> Bool {
-        guard (platform == nil || platform === settings.platform) && (sdkVariant == nil || sdkVariant?.name == settings.sdkVariant?.name) else {
+        isCompatible(with: configuredTarget, platform: settings.platform, sdk: settings.sdk, sdkVariant: settings.sdkVariant, toolchains: settings.toolchains, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext)
+    }
+
+    /// Check if a configured target can be used when this specialization is required, given the platform, SDK, SDK variant, and toolchains of its settings.
+    func isCompatible(with configuredTarget: ConfiguredTarget, platform: Platform?, sdk: SDK?, sdkVariant: SDKVariant?, toolchains: [Toolchain], workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext) -> Bool {
+        guard (self.platform == nil || self.platform === platform) && (self.sdkVariant == nil || self.sdkVariant?.name == sdkVariant?.name) else {
             return false
         }
         let toolchain = effectiveToolchainOverride(originalParameters: configuredTarget.parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext)
-        return (toolchain == nil || toolchain == settings.toolchains.map({ $0.identifier })) &&
-        (canonicalNameSuffix == nil || canonicalNameSuffix?.nilIfEmpty == settings.sdk?.canonicalNameSuffix)
+        return (toolchain == nil || toolchain == toolchains.map({ $0.identifier })) &&
+        (canonicalNameSuffix == nil || canonicalNameSuffix?.nilIfEmpty == sdk?.canonicalNameSuffix)
     }
 
     /// Return an effective set of specialization parameters based on a specific target-dependency pair.
@@ -532,10 +537,12 @@ extension SpecializationParameters {
     let dynamicallyBuildingTargets: Set<Target>
 
     // TODO: Parameterize this.
-    let disableConcurrentDependencyResolution = UserDefaults.disableConcurrentDependencyResolution
+    let disableConcurrentDependencyResolution: Bool
     let makeAggregateTargetsTransparentForSpecialization = UserDefaults.makeAggregateTargetsTransparentForSpecialization
 
-    init(workspaceContext: WorkspaceContext, buildRequest: BuildRequest, buildRequestContext: BuildRequestContext, delegate: any TargetDependencyResolverDelegate) {
+    /// - parameter concurrent: Whether to resolve dependencies concurrently, unless disabled by the user default. Resolution whose settings have already been computed is faster serially.
+    init(workspaceContext: WorkspaceContext, buildRequest: BuildRequest, buildRequestContext: BuildRequestContext, delegate: any TargetDependencyResolverDelegate, concurrent: Bool = true) {
+        self.disableConcurrentDependencyResolution = !concurrent || UserDefaults.disableConcurrentDependencyResolution
         self.buildRequest = buildRequest
         self.buildRequestContext = buildRequestContext
         self.workspaceContext = workspaceContext
@@ -810,19 +817,7 @@ extension SpecializationParameters {
             return lookupConfiguredTarget(forTarget, parameters: parameters, superimposedProperties: nil)
         }
 
-        var parameters = parameters
-        if buildRequest.buildsIndexWorkspaceDescription {
-            // Avoid forced propagation of "auto" overrides to targets that don't need them. If this is a host tool,
-            // force its parameters to the host platform to avoid creating duplicate configured targets after it has
-            // been specialized.
-            let platformParams: BuildParameters
-            if forTarget.isHostBuildTool {
-                platformParams = hostParametersForIndex?.buildParams ?? parameters
-            } else {
-                platformParams = parameters
-            }
-            parameters = buildRequest.parameters.replacing(activeRunDestination: platformParams.activeRunDestination, activeArchitecture: platformParams.activeArchitecture)
-        }
+        let parameters = parametersForSpecializedLookup(forTarget, parameters: parameters)
 
         // If we have an existing target compatible with the specialization parameters, we always return it.
         //
@@ -832,9 +827,10 @@ extension SpecializationParameters {
         if let configuredTargets = configuredTargetsByTarget[forTarget], !isTopLevelLookup {
             for ct in configuredTargets {
                 if ct.specializeGuidForActiveRunDestination && parameters.activeRunDestination != ct.parameters.activeRunDestination { continue }
+                // Only the platform, SDK, SDK variant, and toolchains of the settings are needed, which are cheaper to compute than the settings.
                 let parametersWithoutRunDestination = ct.parameters.replacing(activeRunDestination: nil, activeArchitecture: nil)
-                let settings = buildRequestContext.getCachedSettings(parametersWithoutRunDestination, target: ct.target)
-                if specialization.isCompatible(with: ct, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
+                let properties = buildRequestContext.getCachedBoundPlatformProperties(parametersWithoutRunDestination, target: ct.target)
+                if specialization.isCompatible(with: ct, platform: properties.platform, sdk: properties.sdk, sdkVariant: properties.sdkVariant, toolchains: properties.toolchains, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
                     if imposedParameters?.superimposedProperties != nil {
                         addSuperimposedProperties(for: ct, superimposedProperties: imposedParameters?.superimposedProperties)
                     }
@@ -843,6 +839,31 @@ extension SpecializationParameters {
             }
         }
 
+        let configuration = specializedConfiguration(forTarget, parameters: parameters, specialization: specialization, emitDiagnostics: true)
+        return lookupConfiguredTarget(forTarget, parameters: configuration.parameters, superimposedProperties: configuration.superimposedProperties)
+    }
+
+    /// Returns the parameters to look up a configured target for `forTarget` with specialization.
+    nonisolated func parametersForSpecializedLookup(_ forTarget: Target, parameters: BuildParameters) -> BuildParameters {
+        guard buildRequest.buildsIndexWorkspaceDescription else {
+            return parameters
+        }
+        // Avoid forced propagation of "auto" overrides to targets that don't need them. If this is a host tool,
+        // force its parameters to the host platform to avoid creating duplicate configured targets after it has
+        // been specialized.
+        let platformParams: BuildParameters
+        if forTarget.isHostBuildTool {
+            platformParams = hostParametersForIndex?.buildParams ?? parameters
+        } else {
+            platformParams = parameters
+        }
+        return buildRequest.parameters.replacing(activeRunDestination: platformParams.activeRunDestination, activeArchitecture: platformParams.activeArchitecture)
+    }
+
+    /// Computes the parameters of a new configured target for `forTarget` with `specialization` imposed on them, when there's no existing compatible configured target.
+    ///
+    /// This doesn't depend on the configured targets created so far, so it can be computed concurrently, or speculatively to compute the settings that resolution will need. Speculative callers pass `false` for `emitDiagnostics`, so that problems with the specialization are only reported once.
+    nonisolated func specializedConfiguration(_ forTarget: Target, parameters: BuildParameters, specialization: SpecializationParameters, emitDiagnostics: Bool) -> (parameters: BuildParameters, superimposedProperties: SuperimposedProperties?) {
         // Filter any overrides from the parameters, because they can shadow any original "auto" values.
         let filteredParameters = parameters.withoutOverrides
 
@@ -887,15 +908,19 @@ extension SpecializationParameters {
                     imposedSupportedPlatforms = nil
 
                     if let specializedSupportedPlatforms = specialization.supportedPlatforms, let imposedPlatform = imposedPlatform {
-                        let data = DiagnosticData("Target '\(forTarget.name)' does not support any of the imposed platforms '\(specializedSupportedPlatforms.joined(separator: " "))' and a single platform could not be chosen from its own supported platforms '\(supportedPlatforms.joined(separator: " "))'. For backwards compatibility, it will be built for \(imposedPlatform.displayName).")
-                        delegate.emit(Diagnostic(behavior: .warning, location: .unknown, data: data))
+                        if emitDiagnostics {
+                            let data = DiagnosticData("Target '\(forTarget.name)' does not support any of the imposed platforms '\(specializedSupportedPlatforms.joined(separator: " "))' and a single platform could not be chosen from its own supported platforms '\(supportedPlatforms.joined(separator: " "))'. For backwards compatibility, it will be built for \(imposedPlatform.displayName).")
+                            delegate.emit(Diagnostic(behavior: .warning, location: .unknown, data: data))
+                        }
                     } else {
                         // Since imposing a platform implies imposing `SUPPORTED_PLATFORMS` as well, I think this is only reachable if the imposed platform is nil.
                         // We emit extra diagnostics about the imposed parameters here because it's likely something strange has happened if we get here.
-                        specialization.emitDiagnostics(to: delegate)
-                        let data = DiagnosticData("Could not choose a single platform for target '\(forTarget.name)' from the supported platforms '\(supportedPlatforms.joined(separator: " "))'. \(imposedParameters?.description ?? "(No specialization parameters.)")")
-                        let warnOnly = UserDefaults.platformSpecializationWarnOnly
-                        delegate.emit(Diagnostic(behavior: warnOnly ? .warning : .error, location: .unknown, data: data))
+                        if emitDiagnostics {
+                            specialization.emitDiagnostics(to: delegate)
+                            let data = DiagnosticData("Could not choose a single platform for target '\(forTarget.name)' from the supported platforms '\(supportedPlatforms.joined(separator: " "))'. \(specialization.description)")
+                            let warnOnly = UserDefaults.platformSpecializationWarnOnly
+                            delegate.emit(Diagnostic(behavior: warnOnly ? .warning : .error, location: .unknown, data: data))
+                        }
                     }
                 }
             }
@@ -928,7 +953,7 @@ extension SpecializationParameters {
             let specializationSDKOptions = initialSettings.globalScope.evaluate(BuiltinMacros.SPECIALIZATION_SDK_OPTIONS)
             if specializationIsSupported {
                 // If specialization explicitly requires public, but the target itself requires internal, emit an error.
-                if let sdkSuffixFromSpecialization = specialization.canonicalNameSuffix, sdkSuffixFromSpecialization.isEmpty, !specializationSDKOptions.isEmpty {
+                if emitDiagnostics, let sdkSuffixFromSpecialization = specialization.canonicalNameSuffix, sdkSuffixFromSpecialization.isEmpty, !specializationSDKOptions.isEmpty {
                     let specializationSuffix: String
                     switch specialization.source {
                     case .synthesized:
@@ -961,7 +986,9 @@ extension SpecializationParameters {
                 } else if let suffix = suffixes.only {
                     imposedCanonicalNameSuffix = suffix
                 } else {
-                    delegate.error("cannot impose multiple sdk suffixes on target '\(forTarget.name)': \(suffixes.joined(separator: ", "))")
+                    if emitDiagnostics {
+                        delegate.error("cannot impose multiple sdk suffixes on target '\(forTarget.name)': \(suffixes.joined(separator: ", "))")
+                    }
                     imposedCanonicalNameSuffix = ""
                 }
             } else {
@@ -971,7 +998,9 @@ extension SpecializationParameters {
                 } else if let suffix = suffixes.only {
                     imposedCanonicalNameSuffix = suffix
                 } else {
-                    delegate.error("cannot impose multiple sdk suffixes on target '\(forTarget.name)': \(suffixes.joined(separator: ", "))")
+                    if emitDiagnostics {
+                        delegate.error("cannot impose multiple sdk suffixes on target '\(forTarget.name)': \(suffixes.joined(separator: ", "))")
+                    }
                     imposedCanonicalNameSuffix = nil
                 }
             }
@@ -1003,11 +1032,11 @@ extension SpecializationParameters {
         // FIXME: rdar://80907686 (BuildParameters are ConfiguredTargets is problematic)
         // Ideally, this code shouldn't live here, but there are issues tracked in (rdar://80907686) that we need to work through.
         if settings.enableTargetPlatformSpecialization || settings.enableBuildRequestOverrides || fromPackage {
-            return lookupConfiguredTarget(forTarget, parameters: filteredSpecialization.imposed(on: parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), superimposedProperties: filteredSpecialization.superimposedProperties)
+            return (filteredSpecialization.imposed(on: parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), filteredSpecialization.superimposedProperties)
         }
         else {
             let nonimposedParameters = fromPackage ? parameters : parameters.withoutImposedOverrides(buildRequest, core: workspaceContext.core)
-            return lookupConfiguredTarget(forTarget, parameters: filteredSpecialization.imposed(on: nonimposedParameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), superimposedProperties: filteredSpecialization.superimposedProperties)
+            return (filteredSpecialization.imposed(on: nonimposedParameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext), filteredSpecialization.superimposedProperties)
         }
     }
 
