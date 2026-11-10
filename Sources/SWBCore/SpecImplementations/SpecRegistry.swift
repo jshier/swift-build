@@ -364,6 +364,21 @@ public final class SpecRegistry: Sendable {
     /// Whether the registry has been frozen (mutations are no longer possible). The process will crash if something attempts to mutate it after it has been frozen.
     private let isFrozen = SWBMutex<Bool>(false)
 
+    /// Whether the registry is frozen, readable without taking a lock.
+    private let isFrozenForLookups = Atomic<Bool>(false)
+
+    private struct ProxyLookupKey: Hashable, Sendable {
+        let identifier: String
+        let domain: String
+    }
+
+    private struct ProxyLookupResult: @unchecked Sendable {
+        let proxy: SpecProxy?
+    }
+
+    /// The results of looking up proxies once the registry is frozen, because specs are looked up often, and from many threads at once while planning, and looking one up takes a lock for each domain searched.
+    private let proxyLookupCache = ShardedRegistry<ProxyLookupKey, ProxyLookupResult>()
+
     /// Create a SpecRegistry from all of the specs in the given search paths.
     ///
     /// - parameter delegate: The delegate used to report diagnostics about spec loading.
@@ -486,6 +501,7 @@ public final class SpecRegistry: Sendable {
     /// Mark the registry as immutable.
     public func freeze() {
         isFrozen.withLock { $0 = true }
+        isFrozenForLookups.store(true, ordering: .releasing)
     }
 
     /// Asynchronously register all specs in the given directory.
@@ -813,6 +829,15 @@ public final class SpecRegistry: Sendable {
 
     /// Look up the proxy for a given identifier and domain.
     @_spi(Testing) public func lookupProxy(_ identifier: String, domain: String = "") -> SpecProxy? {
+        if isFrozenForLookups.load(ordering: .acquiring) {
+            return proxyLookupCache.getOrInsert(ProxyLookupKey(identifier: identifier, domain: domain)) {
+                ProxyLookupResult(proxy: _lookupProxy(identifier, domain: domain))
+            }.proxy
+        }
+        return _lookupProxy(identifier, domain: domain)
+    }
+
+    private func _lookupProxy(_ identifier: String, domain: String) -> SpecProxy? {
         for domain in getDomainSearchListForDomain(domain) {
             if let result = getRegistryForDomain(domain).proxiesByIdentifier[identifier] {
                 return result
