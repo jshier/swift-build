@@ -255,10 +255,7 @@ fileprivate extension TargetDependencyResolver {
 
 /// Builder-like class for resolving target dependencies.
 @_spi(Testing) public actor TargetDependencyResolver {
-    /// The set of visited discovered targets.
-    private var visitedDiscoveredTargets = Set<ConfiguredTarget>()
-
-    /// The set of targets which have been discovered.
+    /// The dependency information of the targets which have been discovered.
     private var discoveredTargets = [ConfiguredTarget: DiscoveredTargetInfo]()
 
     private let linkageDependencyResolver: LinkageDependencyResolver?
@@ -427,23 +424,13 @@ fileprivate extension TargetDependencyResolver {
             break
         }
 
-        // First, perform discovery of all of the targets in the build, and configure them with specialization parameters.
-        //
-        // This is an explicit pre-pass which satisfies two goals: it allows us to unique specializations more simply, and it allows us to separate the expensive computation (the computation of build settings during implicit dependencies) from the order dependent logic, so we can run it in parallel.
+        // First, compute the settings that resolution needs concurrently, then resolve the graph in a single traversal, which discovers each target's dependencies, configures them with specialization parameters, and adds them to the dependency closure.
         let topLevelTargetsToDiscover = await resolver.concurrentMap(maximumParallelism: 100, buildRequest.buildTargets) { [resolver] in
             await resolver.lookupTopLevelConfiguredTarget($0)
         }
-        if !topLevelTargetsToDiscover.isEmpty {
-            // Debug activity logs would report the targets visited speculatively.
-            if !workspaceContext.userPreferences.enableDebugActivityLogs {
-                await SettingsWarmUp(resolver: resolver).warmUp(topLevelTargets: topLevelTargetsToDiscover)
-            }
-            await resolver.concurrentPerform(iterations: topLevelTargetsToDiscover.count, maximumParallelism: 100) { [self] i in
-                if Task.isCancelled { return }
-                let configuredTarget = topLevelTargetsToDiscover[i]
-                let imposedParameters = resolver.specializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
-                await discoverInfo(for: configuredTarget, imposedParameters: imposedParameters)
-            }
+        // Debug activity logs would report the targets visited speculatively.
+        if !topLevelTargetsToDiscover.isEmpty && !workspaceContext.userPreferences.enableDebugActivityLogs {
+            await SettingsWarmUp(resolver: resolver).warmUp(topLevelTargets: topLevelTargetsToDiscover)
         }
 
         // Go through the build requests's top-level configured targets.  For each one we ask it to add its dependencies and then itself to the dependency closure.
@@ -746,52 +733,6 @@ fileprivate extension TargetDependencyResolver {
         return (allTargets, targetDependencies, targetsToLinkedReferencesToProducingTargets, resolver.dynamicallyBuildingTargets, architectureReplacements)
     }
 
-    /// Discover the dependency information for one target.
-    ///
-    /// This will update the shared configured target and dependency info.
-    func discoverInfo(for configuredTarget: ConfiguredTarget, imposedParameters: SpecializationParameters?) async {
-        // Track that we have visited this target.
-        let visited = !visitedDiscoveredTargets.insert(configuredTarget).inserted
-
-        if visited && configuredTarget.target.type == .aggregate && resolver.makeAggregateTargetsTransparentForSpecialization {
-            let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
-            if let imposedParameters = imposedParameters, !imposedParameters.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
-                resolver.emitUnsupportedAggregateTargetDiagnostic(for: configuredTarget)
-            }
-        }
-
-        // If already visited, or we have been cancelled, bail out.
-        if visited || Task.isCancelled {
-            return
-        }
-
-        // Add the discovered info.
-        let discoveredInfo = await computeDiscoveredTargetInfo(for: configuredTarget, imposedParameters: imposedParameters, resolver: resolver)
-        discoveredTargets[configuredTarget] = discoveredInfo
-
-        // If we have no dependencies, we are done.
-        if discoveredInfo.immediateDependencies.isEmpty {
-            return
-        }
-
-        // Otherwise, dispatch discovery of all of the immediate dependencies in parallel.
-        await resolver.concurrentPerform(iterations: discoveredInfo.immediateDependencies.count, maximumParallelism: 100) { [self] i in
-            let dependency = discoveredInfo.immediateDependencies[i]
-            let imposedParametersForDependency: SpecializationParameters
-            if resolver.makeAggregateTargetsTransparentForSpecialization {
-                // Aggregate targets should be transparent for specialization.
-                if let imposedParameters = imposedParameters, dependency.target.target.type == .aggregate {
-                    imposedParametersForDependency = imposedParameters
-                } else {
-                    imposedParametersForDependency = resolver.specializationParameters(dependency.target, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
-                }
-            } else {
-                imposedParametersForDependency = resolver.specializationParameters(dependency.target, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
-            }
-            await self.discoverInfo(for: dependency.target, imposedParameters: imposedParametersForDependency)
-        }
-    }
-
     /// Private method to add the receiver's dependencies to a dependency closure ordered set, followed by adding the receiver itself.  Each target is configured using the parameters of `configuredTarget` before being added to the closure.  This effectively performs a postorder traversal of the target dependency graph.
     ///
     /// - Parameters:
@@ -799,11 +740,20 @@ fileprivate extension TargetDependencyResolver {
     ///   - configuredTarget: The configured target whose parameters should be used to configure the receiver and its dependencies.
     ///   - dependencyPath: The ordered list of dependencies added along the path to this target, for detecting recursion.
     ///   - imposedParameters: Additional build parameter overrides which should be imposed upon all targets along this path (for specialization purposes).
-    private func addDependencies(forConfiguredTarget configuredTarget: ConfiguredTarget, toDependencyClosure dependencyClosure: inout OrderedSet<ConfiguredTarget>, dependencyPath: inout OrderedSet<ConfiguredTarget>, imposedParameters: SpecializationParameters? = nil) async {
+    private func addDependencies(forConfiguredTarget configuredTarget: ConfiguredTarget, toDependencyClosure dependencyClosure: inout OrderedSet<ConfiguredTarget>, dependencyPath: inout OrderedSet<ConfiguredTarget>, imposedParameters: SpecializationParameters? = nil, inheritedDiscoveryParameters: SpecializationParameters? = nil) async {
         let statusMessage = workspaceContext.userPreferences.activityTextShorteningLevel >= .allDynamicText
             ? "Computing dependencies"
             : "Computing dependencies for '\(configuredTarget.target.name)'"
         delegate.updateProgress(statusMessage: statusMessage, showInLog: false)
+
+        // Targets are discovered with their own specialization parameters imposed on their dependencies, except for aggregate targets, which pass on those of the targets depending on them when they're transparent for specialization. (Unlike `imposedParameters`, these are also defined for aggregate targets which top-level targets depend on.)
+        let discoveryImposedParameters = imposedParameters ?? inheritedDiscoveryParameters ?? resolver.specializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
+        if configuredTarget.target.type == .aggregate && resolver.makeAggregateTargetsTransparentForSpecialization, discoveredTargets[configuredTarget] != nil {
+            let settings = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target)
+            if !discoveryImposedParameters.isCompatible(with: configuredTarget, settings: settings, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
+                resolver.emitUnsupportedAggregateTargetDiagnostic(for: configuredTarget)
+            }
+        }
 
         // Update the path, while traversing.
         guard dependencyPath.append(configuredTarget).inserted else {
@@ -822,7 +772,13 @@ fileprivate extension TargetDependencyResolver {
         // The combination of these two guards means that the top-level target where any recursion was entered will always be added to the end of the dependency closure.
         guard !dependencyClosure.contains(configuredTarget) else { return }
 
-        // Get the discovered target info, or create it if necessary (for targets not visited in the initial discovery, or when specialization has become active).
+        // Discover the target when it's first visited.
+        if discoveredTargets[configuredTarget] == nil {
+            if Task.isCancelled { return }
+            discoveredTargets[configuredTarget] = await computeDiscoveredTargetInfo(for: configuredTarget, imposedParameters: discoveryImposedParameters, resolver: resolver)
+        }
+
+        // Get the discovered target info, or create it if the target is visited with an incompatible specialization.
         let discoveredInfo: DiscoveredTargetInfo
         if let info = discoveredTargets[configuredTarget], imposedParameters == nil || imposedParameters?.isCompatible(with: configuredTarget, settings: buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target), workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) == true {
             discoveredInfo = info
@@ -850,15 +806,14 @@ fileprivate extension TargetDependencyResolver {
         var immediateDependencies = OrderedSet<ResolvedTargetDependency>()
 
         /// Nested function to record that `dependency` is an immediate dependency of the target being processed.
-        let recordImmediateDependency: (ResolvedTargetDependency, SpecializationParameters?, inout OrderedSet<ConfiguredTarget>, inout OrderedSet<ConfiguredTarget>) async -> Void = { [self] dependency, imporsedParameters, dependencyClosure, dependencyPath in
+        let recordImmediateDependency: (ResolvedTargetDependency, SpecializationParameters?, inout OrderedSet<ConfiguredTarget>, inout OrderedSet<ConfiguredTarget>) async -> Void = { [self] dependency, _, dependencyClosure, dependencyPath in
             immediateDependencies.append(dependency)
-            let dependencyImposedParameters: SpecializationParameters?
             if self.resolver.makeAggregateTargetsTransparentForSpecialization && dependency.target.target.type == .aggregate {
-                dependencyImposedParameters = imposedParameters
+                await addDependencies(forConfiguredTarget: dependency.target, toDependencyClosure: &dependencyClosure, dependencyPath: &dependencyPath, imposedParameters: imposedParameters, inheritedDiscoveryParameters: discoveryImposedParameters)
             } else {
-                dependencyImposedParameters = resolver.specializationParameters(dependency.target, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
+                let dependencyImposedParameters = resolver.specializationParameters(dependency.target, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext)
+                await addDependencies(forConfiguredTarget: dependency.target, toDependencyClosure: &dependencyClosure, dependencyPath: &dependencyPath, imposedParameters: dependencyImposedParameters)
             }
-            await addDependencies(forConfiguredTarget: dependency.target, toDependencyClosure: &dependencyClosure, dependencyPath: &dependencyPath, imposedParameters: dependencyImposedParameters)
         }
 
 
@@ -945,9 +900,16 @@ fileprivate extension TargetDependencyResolver {
                 // be included as well, otherwise, they will not be properly considered for things like the specialization
                 // filtering that happens for default vs. suffixed SDK differences between a target. (see rdar://75600023).
 
-                for (key, configuredTargets) in await linkageDependencyResolver.resolver.configuredTargetsByTarget {
-                    resolver.updateConfiguredTargetsByTarget { $0[key, default: []].formUnion(configuredTargets) }
-                    for ct in configuredTargets {
+                // The linkage resolver only adds configured targets, so only those created since the last time need to be added.
+                let linkageConfiguredTargets = await linkageDependencyResolver.resolver.createdConfiguredTargets
+                for ct in linkageConfiguredTargets[resolver.mergedLinkageConfiguredTargetCount...] {
+                    resolver.updateConfiguredTargetsByTarget { $0[ct.target, default: []].insert(ct) }
+                }
+                resolver.mergedLinkageConfiguredTargetCount = linkageConfiguredTargets.count
+
+                // Superimposed properties only have an effect for dependencies which are merged, and only the dependencies which this target links are, so there's nothing to add unless this target merges its dependencies.
+                if imposedParameters?.superimposedProperties?.mergeableLibrary == true {
+                    for ct in linkageConfiguredTargets {
                         let effectiveImposedParameters = imposedParameters?.effectiveParameters(target: configuredTarget, dependency: ct, dependencyResolver: resolver)
                         resolver.addSuperimposedProperties(for: ct, superimposedProperties: effectiveImposedParameters?.superimposedProperties)
                     }

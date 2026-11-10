@@ -13,6 +13,7 @@
 public import SWBUtil
 import struct SWBProtocol.RunDestinationInfo
 import SWBMacro
+import Synchronization
 
 extension ProductReference {
     /// Like `evaluatedName(scope:)`, but only invokes `computeSettings` when the product reference name
@@ -436,8 +437,39 @@ extension BuildRequestContext {
 }
 
 extension DependencyResolver {
+    /// The specialization parameters a configured target imposes on its dependencies, which are memoized for the resolution because they're needed for each dependency on the target.
     nonisolated func specializationParameters(_ configuredTarget: ConfiguredTarget, workspaceContext: WorkspaceContext, buildRequest: BuildRequest, buildRequestContext: BuildRequestContext) -> SpecializationParameters {
-        SpecializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, makeAggregateTargetsTransparentForSpecialization: makeAggregateTargetsTransparentForSpecialization)
+        specializationParametersByConfiguredTarget.getOrInsert(configuredTarget) {
+            SpecializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, makeAggregateTargetsTransparentForSpecialization: makeAggregateTargetsTransparentForSpecialization)
+        }
+    }
+}
+
+/// A dictionary which can be read and written concurrently, sharded so that concurrent accesses rarely contend.
+final class ConcurrentMemo<Key: Hashable & Sendable, Value: Sendable>: Sendable {
+    private final class Shard: Sendable {
+        let values = SWBMutex<[Key: Value]>([:])
+        // Keep each shard's lock on its own cache line.
+        private let padding: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+
+    private static var shardCount: Int { 32 }
+    private let shards = (0..<ConcurrentMemo.shardCount).map { _ in Shard() }
+
+    /// Returns the value for the key, computing it if needed. The value is computed without holding a lock, so concurrent callers may compute it more than once, but all callers get the first value stored.
+    func getOrInsert(_ key: Key, _ compute: () -> Value) -> Value {
+        let shard = shards[Int(UInt(bitPattern: key.hashValue) % UInt(Self.shardCount))]
+        if let value = shard.values.withLock({ $0[key] }) {
+            return value
+        }
+        let value = compute()
+        return shard.values.withLock { values in
+            if let existing = values[key] {
+                return existing
+            }
+            values[key] = value
+            return value
+        }
     }
 }
 
@@ -510,8 +542,17 @@ extension SpecializationParameters {
         update(&configuredTargetsByTarget)
     }
 
+    /// The configured targets created by `lookupConfiguredTarget`, in the order they were created.
+    private(set) var createdConfiguredTargets = [ConfiguredTarget]()
+
+    /// The number of configured targets created by the linkage dependency resolver for implicit dependencies which have been added to this resolver.
+    var mergedLinkageConfiguredTargetCount = 0
+
     /// Top-level targets get defaults imposed, in case that they are themselves using "auto" anywhere.
     let defaultImposedParameters: SpecializationParameters
+
+    /// The memoized specialization parameters of configured targets.
+    nonisolated let specializationParametersByConfiguredTarget = ConcurrentMemo<ConfiguredTarget, SpecializationParameters>()
 
     /// Properties we discover that we want to globally impose on all configurations of a target that are compatible with a specialization.
     /// - remark: The use of `SpecializationParameters` is a convenience since it already supports the matching we want.  We can replace it with a custom matcher for just this purpose if we ever find that it's no longer suitable.
@@ -805,6 +846,7 @@ extension SpecializationParameters {
             // At this point we know there is not a configured target for this target and parameters in our cache, so create one and return it.
             let configuredTarget = ConfiguredTarget(parameters: parameters, target: target, specializeGuidForActiveRunDestination: buildRequest.buildsIndexWorkspaceDescription)
             configuredTargetsByTarget[configuredTarget.target, default: []].insert(configuredTarget)
+            createdConfiguredTargets.append(configuredTarget)
             addSuperimposedProperties(for: configuredTarget, superimposedProperties: superimposedProperties)
             return configuredTarget
         }
