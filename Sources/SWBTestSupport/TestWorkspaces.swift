@@ -1382,11 +1382,36 @@ package final class TestWorkspace: Resolver, TestInternalItem, Sendable {
         return overriddenGuid ?? "\(type(of: self).guidCode)\(guidIdentifier)"
     }
 
+    /// The first target with each name, and the first standard target with each product reference name along with the index of its project, so that resolving names when converting large workspaces isn't quadratic.
+    private nonisolated(unsafe) let targetsByName: [String: any TestInternalTarget]
+    private nonisolated(unsafe) let targetsByProductReferenceName: [String: (projectIndex: Int, target: TestStandardTarget)]
+    private nonisolated(unsafe) let projectsByTarget: [ObjectIdentifier: TestProject]
+
     package init(_ name: String, guid: String? = nil, sourceRoot: Path? = nil, projects: [TestProject], sourceLocation: SourceLocation = #_sourceLocation) {
         self.name = name
         self.overriddenGuid = guid
         self.sourceRoot = sourceRoot ?? Path.root.join("tmp").join(name)
         self.projects = projects
+
+        var targetsByName = [String: any TestInternalTarget]()
+        var targetsByProductReferenceName = [String: (projectIndex: Int, target: TestStandardTarget)]()
+        var projectsByTarget = [ObjectIdentifier: TestProject]()
+        for (projectIndex, project) in projects.enumerated() {
+            for target in project._targets {
+                if targetsByName[target.name] == nil {
+                    targetsByName[target.name] = target
+                }
+                if let standardTarget = target as? TestStandardTarget, targetsByProductReferenceName[standardTarget.productReferenceName] == nil {
+                    targetsByProductReferenceName[standardTarget.productReferenceName] = (projectIndex, standardTarget)
+                }
+                if projectsByTarget[ObjectIdentifier(target)] == nil {
+                    projectsByTarget[ObjectIdentifier(target)] = project
+                }
+            }
+        }
+        self.targetsByName = targetsByName
+        self.targetsByProductReferenceName = targetsByProductReferenceName
+        self.projectsByTarget = projectsByTarget
     }
 
     /// Load the test workspace into a concrete object, via a PIF.
@@ -1476,15 +1501,11 @@ package final class TestWorkspace: Resolver, TestInternalItem, Sendable {
     }
 
     fileprivate func findAuto(_ name: String) throws -> TestBuildableItem {
-        for project in projects {
-            // Look in the product references.
-            for target in project._targets {
-                guard let standardTarget = target as? TestStandardTarget else { continue }
-
-                // FIXME: <rdar://119010301> This should not resolve to a product reference if the target is in a different project (unless a project reference is involved, which I don't think the test model presently supports).  This can result in subtle issues not being caught by the test when logic which relies on using a product reference (or not) is a factor.  For example some of the mergeable libraries logic.
-                if standardTarget.productReferenceName == name {
-                    return .targetProduct(guid: standardTarget.guid)
-                }
+        // Product references take precedence over the files in the group trees of their projects and later ones.
+        let productReference = targetsByProductReferenceName[name]
+        for (projectIndex, project) in projects.enumerated() {
+            if let productReference, productReference.projectIndex == projectIndex {
+                return .targetProduct(guid: productReference.target.guid)
             }
 
             // Look in the group tree.
@@ -1549,25 +1570,14 @@ package final class TestWorkspace: Resolver, TestInternalItem, Sendable {
     }
 
     fileprivate func findTarget(_ name: String) -> (any TestInternalTarget)? {
-        for project in projects {
-            for target in project._targets {
-                if target.name == name {
-                    return target
-                }
-            }
-        }
-        return nil
+        targetsByName[name]
     }
 
     fileprivate func findProject(for target: any TestInternalTarget) throws -> TestProject {
-        for project in projects {
-            for aTarget in project._targets {
-                if aTarget === target {
-                    return project
-                }
-            }
+        guard let project = projectsByTarget[ObjectIdentifier(target)] else {
+            throw StubError.error("could not find project for target \(target)")
         }
-        throw StubError.error("could not find project for target \(target)")
+        return project
     }
 }
 
