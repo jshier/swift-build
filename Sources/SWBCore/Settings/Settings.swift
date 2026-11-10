@@ -816,18 +816,31 @@ public final class Settings: PlatformBuildContext, TripleLookup, Sendable {
         package let sdk: SDK?
         package let sdkVariant: SDKVariant?
         package let toolchains: [Toolchain]
-        let inputPathsAffectingSettings: [Path]
-        let inputPathsAffectingSettingsSignature: FilesSignature
     }
 
-    /// Computes the platform, SDK, SDK variant, and toolchains which the settings for the given parameters, project, and target have, without computing the settings.
-    static func boundPlatformProperties(workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext, parameters: BuildParameters, project: Project, target: Target?) -> BoundPlatformProperties {
-        // This matches the computation of the bound properties in `SettingsBuilder.construct()`.
-        let builder = SettingsBuilder(workspaceContext, buildRequestContext, parameters, SettingsContext(.build, project: project, target: target), forBindingProperties: true, nil)
-        let effectiveProjectConfig = project.getEffectiveConfiguration(parameters.configuration, packageConfigurationOverride: parameters.packageConfigurationOverride)
-        let targetConfiguration = target?.getEffectiveConfiguration(parameters.configuration, defaultConfigurationName: project.isPackage ? (parameters.packageConfigurationOverride ?? project.defaultConfigurationName) : project.defaultConfigurationName)
+    /// The bound properties of settings, which depend only on the parameters, project, target, and purpose, along with the diagnostics of computing them, so that settings which differ in other inputs, such as provisioning inputs or imparted build properties, can share them.
+    struct CachedBoundProperties: @unchecked Sendable {
+        let boundProperties: SettingsBuilder.BoundProperties
+        let errors: [String]
+        let warnings: [String]
+        let notes: [String]
+        let diagnostics: [Diagnostic]
+        let inputPathsAffectingSettings: [Path]
+        let inputPathsAffectingSettingsSignature: FilesSignature
+
+        var platformProperties: BoundPlatformProperties {
+            BoundPlatformProperties(platform: boundProperties.platform, sdk: boundProperties.sdk, sdkVariant: boundProperties.sdkVariant, toolchains: boundProperties.toolchains)
+        }
+    }
+
+    /// Computes the bound properties of the settings for the given parameters and settings context, as `SettingsBuilder.construct()` does, without computing the settings.
+    static func computeBoundProperties(workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext, parameters: BuildParameters, settingsContext: SettingsContext, sdkRegistry: (any SDKRegistryLookup)?) -> CachedBoundProperties {
+        let builder = SettingsBuilder(workspaceContext, buildRequestContext, parameters, settingsContext, forBindingProperties: true, sdkRegistry)
+        let project = settingsContext.project
+        let effectiveProjectConfig = project.map { project in project.getEffectiveConfiguration(parameters.configuration, packageConfigurationOverride: parameters.packageConfigurationOverride)! }
+        let targetConfiguration = project.map { project in settingsContext.target?.getEffectiveConfiguration(parameters.configuration, defaultConfigurationName: project.isPackage ? (parameters.packageConfigurationOverride ?? project.defaultConfigurationName) : project.defaultConfigurationName) } ?? nil
         let boundProperties = MacroNamespace.withExpressionInterningEnabled { builder.computeBoundProperties(effectiveProjectConfig, targetConfiguration) }
-        return BoundPlatformProperties(platform: boundProperties.platform, sdk: boundProperties.sdk, sdkVariant: boundProperties.sdkVariant, toolchains: boundProperties.toolchains, inputPathsAffectingSettings: builder.inputPathsAffectingSettings.elements, inputPathsAffectingSettingsSignature: builder.inputPathsAffectingSettingsSignature)
+        return CachedBoundProperties(boundProperties: boundProperties, errors: builder.errors.elements, warnings: builder.warnings.elements, notes: builder.notes.elements, diagnostics: builder.diagnostics.elements, inputPathsAffectingSettings: builder.inputPathsAffectingSettings.elements, inputPathsAffectingSettingsSignature: builder.inputPathsAffectingSettingsSignature)
     }
 
     /// Structure to hold information about the project model components from which a settings object was constructed.
@@ -1246,7 +1259,7 @@ public struct SettingsContext: Sendable {
 }
 
 /// This class is responsible for construction of the build settings to use when evaluate macros for a project or target.
-private class SettingsBuilder: ProjectMatchLookup, TripleLookup {
+final class SettingsBuilder: ProjectMatchLookup, TripleLookup {
     func matchesAnyProjectIdentities(scope: SWBMacro.MacroEvaluationScope, projectIdentities: Set<String>) -> Bool {
         workspaceContext.core.pluginManager.extensions(of: SettingsBuilderExtensionPoint.self).contains(where: { ext in ext.matchesAnyProjectIdentities(scope: scope, projectIdentities: projectIdentities) })
     }
@@ -1340,6 +1353,9 @@ private class SettingsBuilder: ProjectMatchLookup, TripleLookup {
     let workspaceContext: WorkspaceContext
     let buildRequestContext: BuildRequestContext
     let sdkRegistry: any SDKRegistryLookup
+
+    /// Whether `sdkRegistry` is the workspace context's.
+    let usesDefaultSDKRegistry: Bool
     let parameters: BuildParameters
     let settingsContext: SettingsContext
 
@@ -1487,6 +1503,7 @@ private class SettingsBuilder: ProjectMatchLookup, TripleLookup {
         self.workspaceContext = workspaceContext
         self.buildRequestContext = buildRequestContext
         self.sdkRegistry = sdkRegistry ?? workspaceContext.sdkRegistry
+        self.usesDefaultSDKRegistry = sdkRegistry == nil
         self.parameters = parameters
         self.settingsContext = settingsContext
         self.provisioningTaskInputs = provisioningTaskInputs
@@ -1521,12 +1538,19 @@ private class SettingsBuilder: ProjectMatchLookup, TripleLookup {
         // Even though the initialization that will be done by this builder is very similar to the initialization we do, we cannot simply do the initialization, bind the properties, and then continue, because some of the settings which are derived from the bound objects are injected at varying points in the process (this dates from Xcode's injecting these settings into different tiers).
         //
         // FIXME: This is unfortunate, as it makes settings construction about twice as expensive as it otherwise could be. We should eventually try to devise a roadmap in which the binding can happen much more simply, so we don't need to do this.
-        let bindingBuilder = SettingsBuilder(self.workspaceContext, self.buildRequestContext, self.parameters, self.settingsContext, forBindingProperties: true, sdkRegistry)
-        let boundProperties = bindingBuilder.computeBoundProperties(effectiveProjectConfig, targetConfiguration)
-        self.errors.append(contentsOf: bindingBuilder.errors)
-        self.warnings.append(contentsOf: bindingBuilder.warnings)
-        self.notes.append(contentsOf: bindingBuilder.notes)
-        self.diagnostics.append(contentsOf: bindingBuilder.diagnostics)
+        //
+        // The bound properties don't depend on the provisioning inputs, imparted build properties, artifact bundles, or compilation caching, so they're cached for the settings which differ only in those, unless a custom SDK registry is used.
+        let cachedBoundProperties: Settings.CachedBoundProperties
+        if usesDefaultSDKRegistry, let project {
+            cachedBoundProperties = workspaceContext.workspaceSettingsCache.getCachedBoundProperties(parameters, project: project, target: target, purpose: settingsContext.purpose, buildRequestContext: buildRequestContext, filesSignature: { [buildRequestContext] in buildRequestContext.filesSignature(for: $0) })
+        } else {
+            cachedBoundProperties = Settings.computeBoundProperties(workspaceContext: workspaceContext, buildRequestContext: buildRequestContext, parameters: parameters, settingsContext: settingsContext, sdkRegistry: usesDefaultSDKRegistry ? nil : sdkRegistry)
+        }
+        let boundProperties = cachedBoundProperties.boundProperties
+        self.errors.append(contentsOf: cachedBoundProperties.errors)
+        self.warnings.append(contentsOf: cachedBoundProperties.warnings)
+        self.notes.append(contentsOf: cachedBoundProperties.notes)
+        self.diagnostics.append(contentsOf: cachedBoundProperties.diagnostics)
 
         // For historical reasons, the SettingsBuilder uses the core's SpecRegistry even after it's bound the platform.
         // !!!:mhr:20221118: I think there's only one SpecRegistry in the process, exposed through many different protocols, but I'm reluctant to test that theory in the large platform-optionality project that's adding this SpecLookupContext.

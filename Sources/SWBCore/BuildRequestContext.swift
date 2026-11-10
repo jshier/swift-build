@@ -40,7 +40,7 @@ public final class BuildRequestContext: Sendable {
     }
 
     /// Gets the file signature for the specified set of paths. This is cached for the lifetime of the build request.
-    private func filesSignature(for paths: [Path]) -> FilesSignature {
+    func filesSignature(for paths: [Path]) -> FilesSignature {
         filesSignatureCache.getOrInsert(paths) { workspaceContext.fs.filesSignature(paths) }
     }
 
@@ -158,7 +158,7 @@ public final class BuildRequestContext: Sendable {
 
     /// Get the cached platform, SDK, SDK variant, and toolchains of the settings for the given parameters and target, which are cheaper to compute than the settings.
     package func getCachedBoundPlatformProperties(_ parameters: BuildParameters, target: Target) -> Settings.BoundPlatformProperties {
-        workspaceContext.workspaceSettingsCache.getCachedBoundPlatformProperties(parameters, project: workspaceContext.workspace.project(for: target), target: target, buildRequestContext: self, filesSignature: filesSignature(for:))
+        workspaceContext.workspaceSettingsCache.getCachedBoundProperties(parameters, project: workspaceContext.workspace.project(for: target), target: target, purpose: .build, buildRequestContext: self, filesSignature: filesSignature(for:)).platformProperties
     }
 
     /// Private method to get the cached settings for the given parameters, project, and target.

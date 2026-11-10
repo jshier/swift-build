@@ -104,15 +104,15 @@ final class WorkspaceSettingsCache: Sendable {
         }
     }
 
-    /// Get the cached platform, SDK, SDK variant, and toolchains of the settings for the given parameters, project, and target, which can be computed without the rest of the settings.
-    internal func getCachedBoundPlatformProperties(_ parameters: BuildParameters, project: Project, target: Target?, buildRequestContext: BuildRequestContext, filesSignature: ([Path]) -> FilesSignature) -> Settings.BoundPlatformProperties {
-        let key = SettingsCacheKey(parameters: parameters, projectGUID: project.guid, targetGUID: target?.guid, purpose: .build, provisioningTaskInputs: nil, impartedBuildProperties: nil, artifactBundleInfo: nil, compilationCachingInfo: nil)
-        return boundPlatformPropertiesCache.getOrInsert(key, isValid: { properties in filesSignature(properties.inputPathsAffectingSettings) == properties.inputPathsAffectingSettingsSignature }) {
-            Settings.boundPlatformProperties(workspaceContext: workspaceContext, buildRequestContext: buildRequestContext, parameters: parameters, project: project, target: target)
+    /// Get the cached bound properties of the settings for the given parameters, project, target, and purpose, which settings that differ only in other inputs share.
+    internal func getCachedBoundProperties(_ parameters: BuildParameters, project: Project, target: Target?, purpose: SettingsPurpose, buildRequestContext: BuildRequestContext, filesSignature: ([Path]) -> FilesSignature) -> Settings.CachedBoundProperties {
+        let key = SettingsCacheKey(parameters: parameters, projectGUID: project.guid, targetGUID: target?.guid, purpose: purpose, provisioningTaskInputs: nil, impartedBuildProperties: nil, artifactBundleInfo: nil, compilationCachingInfo: nil)
+        return boundPropertiesCache.getOrInsert(key, isValid: { properties in filesSignature(properties.inputPathsAffectingSettings) == properties.inputPathsAffectingSettingsSignature }) {
+            Settings.computeBoundProperties(workspaceContext: workspaceContext, buildRequestContext: buildRequestContext, parameters: parameters, settingsContext: SettingsContext(purpose, project: project, target: target), sdkRegistry: nil)
         }
     }
 
-    private let boundPlatformPropertiesCache = ScopedKeepAliveCache(HeavyCache<SettingsCacheKey, Lazy<Settings.BoundPlatformProperties>>(timeToLive: Tuning.workspaceSettingsCacheTTL))
+    private let boundPropertiesCache = ScopedKeepAliveCache(HeavyCache<SettingsCacheKey, Lazy<Settings.CachedBoundProperties>>(timeToLive: Tuning.workspaceSettingsCacheTTL))
 
     /// We use a `Lazy` as the value type to allow concurrent settings construction while still ensuring we only ever construct the settings for a particular configuration once, e.g. concurrent access to already constructed settings as well as concurrent setting construction.
     private let settingsCache: ScopedKeepAliveCache<SettingsCacheKey, Lazy<Settings>, HeavyCache<SettingsCacheKey, Lazy<Settings>>>
@@ -127,13 +127,13 @@ final class WorkspaceSettingsCache: Sendable {
 
     func keepAlive<R>(_ f: () throws -> R) rethrows -> R {
         try settingsCache.keepAlive {
-            try boundPlatformPropertiesCache.keepAlive(f)
+            try boundPropertiesCache.keepAlive(f)
         }
     }
 
     func keepAlive<R>(_ f: () async throws -> R) async rethrows -> R {
         try await settingsCache.keepAlive {
-            try await boundPlatformPropertiesCache.keepAlive(f)
+            try await boundPropertiesCache.keepAlive(f)
         }
     }
 
