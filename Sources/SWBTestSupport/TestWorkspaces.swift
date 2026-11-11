@@ -1284,7 +1284,7 @@ package final class TestBuildConfiguration: TestInternalItem, Sendable {
 
     fileprivate func toProtocol(_ resolver: any Resolver) throws -> SWBProtocol.BuildConfiguration {
         let baseConfigGUID = try self.baseConfig.map{ try resolver.findFile($0) }
-        return SWBProtocol.BuildConfiguration(name: name, buildSettings: buildSettings.map{ .init(key: $0.0, value: .string($0.1)) }, baseConfigurationFileReferenceGUID: baseConfigGUID, impartedBuildProperties: impartedBuildProperties.toProtocol(resolver))
+        return SWBProtocol.BuildConfiguration(name: name, buildSettings: buildSettings.sorted(byKey: <).map { .init(key: $0.0, value: .string($0.1)) }, baseConfigurationFileReferenceGUID: baseConfigGUID, impartedBuildProperties: impartedBuildProperties.toProtocol(resolver))
     }
 }
 
@@ -1298,7 +1298,7 @@ package final class TestImpartedBuildProperties: TestInternalItem, Sendable {
     }
 
     fileprivate func toProtocol(_ resolver: any Resolver) -> SWBProtocol.ImpartedBuildProperties {
-        return SWBProtocol.ImpartedBuildProperties(buildSettings: buildSettings.map{ .init(key: $0.0, value: .string($0.1)) })
+        return SWBProtocol.ImpartedBuildProperties(buildSettings: buildSettings.sorted(byKey: <).map { .init(key: $0.0, value: .string($0.1)) })
     }
 }
 
@@ -1358,7 +1358,7 @@ package class TestProject: TestInternalObjectItem, @unchecked Sendable {
 
     fileprivate func toProtocol(_ resolver: any Resolver) throws -> SWBProtocol.Project {
         let path = getPath(resolver)
-        return try SWBProtocol.Project(guid: guid, isPackage: isPackage, xcodeprojPath: path, sourceRoot: sourceRoot ?? path.dirname, targetSignatures: _targets.map{ $0.signature }, groupTree: groupTree.toProtocol(resolver, isRoot: true), buildConfigurations: buildConfigurations.map{ try $0.toProtocol(resolver) }, defaultConfigurationName: defaultConfigurationName, developmentRegion: developmentRegion, knownLocalizations: knownLocalizations, classPrefix: classPrefix, appPreferencesBuildSettings: appPreferencesBuildSettings.map{ .init(key: $0.0, value: .string($0.1)) })
+        return try SWBProtocol.Project(guid: guid, isPackage: isPackage, xcodeprojPath: path, sourceRoot: sourceRoot ?? path.dirname, targetSignatures: _targets.map { $0.signature }, groupTree: groupTree.toProtocol(resolver, isRoot: true), buildConfigurations: buildConfigurations.map { try $0.toProtocol(resolver) }, defaultConfigurationName: defaultConfigurationName, developmentRegion: developmentRegion, knownLocalizations: knownLocalizations, classPrefix: classPrefix, appPreferencesBuildSettings: appPreferencesBuildSettings.sorted(byKey: <).map { .init(key: $0.0, value: .string($0.1)) })
     }
 }
 
@@ -1382,11 +1382,21 @@ package final class TestWorkspace: Resolver, TestInternalItem, Sendable {
         return overriddenGuid ?? "\(type(of: self).guidCode)\(guidIdentifier)"
     }
 
+    /// Lookup tables for resolving names, which keep the first match, as scanning the projects did.
+    private let targetsByName: [String: any TestInternalTarget]
+    private let targetsByProductReferenceName: [String: (projectIndex: Int, target: TestStandardTarget)]
+    private let projectsByTarget: [ObjectIdentifier: TestProject]
+
     package init(_ name: String, guid: String? = nil, sourceRoot: Path? = nil, projects: [TestProject], sourceLocation: SourceLocation = #_sourceLocation) {
         self.name = name
         self.overriddenGuid = guid
         self.sourceRoot = sourceRoot ?? Path.root.join("tmp").join(name)
         self.projects = projects
+
+        let targets = projects.enumerated().flatMap { projectIndex, project in project._targets.map { (projectIndex: projectIndex, project: project, target: $0) } }
+        self.targetsByName = Dictionary(targets.map { ($0.target.name, $0.target) }, uniquingKeysWith: { first, _ in first })
+        self.targetsByProductReferenceName = Dictionary(targets.compactMap { entry in (entry.target as? TestStandardTarget).map { ($0.productReferenceName, (entry.projectIndex, $0)) } }, uniquingKeysWith: { first, _ in first })
+        self.projectsByTarget = Dictionary(targets.map { (ObjectIdentifier($0.target), $0.project) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Load the test workspace into a concrete object, via a PIF.
@@ -1476,15 +1486,13 @@ package final class TestWorkspace: Resolver, TestInternalItem, Sendable {
     }
 
     fileprivate func findAuto(_ name: String) throws -> TestBuildableItem {
-        for project in projects {
-            // Look in the product references.
-            for target in project._targets {
-                guard let standardTarget = target as? TestStandardTarget else { continue }
-
-                // FIXME: <rdar://119010301> This should not resolve to a product reference if the target is in a different project (unless a project reference is involved, which I don't think the test model presently supports).  This can result in subtle issues not being caught by the test when logic which relies on using a product reference (or not) is a factor.  For example some of the mergeable libraries logic.
-                if standardTarget.productReferenceName == name {
-                    return .targetProduct(guid: standardTarget.guid)
-                }
+        // A product reference takes precedence over the group trees of its project and later projects.
+        //
+        // FIXME: <rdar://119010301> This should not resolve to a product reference if the target is in a different project (unless a project reference is involved, which I don't think the test model presently supports).  This can result in subtle issues not being caught by the test when logic which relies on using a product reference (or not) is a factor.  For example some of the mergeable libraries logic.
+        let productReference = targetsByProductReferenceName[name]
+        for (projectIndex, project) in projects.enumerated() {
+            if let productReference, productReference.projectIndex == projectIndex {
+                return .targetProduct(guid: productReference.target.guid)
             }
 
             // Look in the group tree.
@@ -1549,25 +1557,14 @@ package final class TestWorkspace: Resolver, TestInternalItem, Sendable {
     }
 
     fileprivate func findTarget(_ name: String) -> (any TestInternalTarget)? {
-        for project in projects {
-            for target in project._targets {
-                if target.name == name {
-                    return target
-                }
-            }
-        }
-        return nil
+        targetsByName[name]
     }
 
     fileprivate func findProject(for target: any TestInternalTarget) throws -> TestProject {
-        for project in projects {
-            for aTarget in project._targets {
-                if aTarget === target {
-                    return project
-                }
-            }
+        guard let project = projectsByTarget[ObjectIdentifier(target)] else {
+            throw StubError.error("could not find project for target \(target)")
         }
-        throw StubError.error("could not find project for target \(target)")
+        return project
     }
 }
 

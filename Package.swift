@@ -500,6 +500,17 @@ if isStaticBuild {
     }
 }
 
+// `SWB_ENABLE_PLANNING_BENCHMARK` adds a benchmark of dependency resolution and build planning. It links the testing support library, so on macOS it finds the Testing framework in the Xcode selected by `DEVELOPER_DIR`.
+if Context.environment["SWB_ENABLE_PLANNING_BENCHMARK"] != nil && !isStaticBuild {
+    let platformDeveloperPath = (Context.environment["DEVELOPER_DIR"] ?? "/Applications/Xcode.app/Contents/Developer") + "/Platforms/MacOSX.platform/Developer"
+    package.targets.append(
+        .executableTarget(
+            name: "SWBPlanningBenchmark",
+            dependencies: ["SWBCore", "SWBLibc", "SWBProtocol", "SWBTaskConstruction", "SWBTaskExecution", "SWBTestSupport", "SWBUtil"],
+            swiftSettings: swiftSettings(languageMode: .v6),
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "\(platformDeveloperPath)/Library/Frameworks", "-Xlinker", "-rpath", "-Xlinker", "\(platformDeveloperPath)/usr/lib"], .when(platforms: [.macOS]))]))
+}
+
 // `SWIFTCI_USE_LOCAL_DEPS` configures if dependencies are locally available to build
 if useLocalDependencies {
     package.dependencies += [

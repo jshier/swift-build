@@ -259,7 +259,7 @@ package class TestTaskPlanningDelegate: TaskPlanningDelegate, @unchecked Sendabl
         })
     }
 
-    var diagnostics: [ConfiguredTarget?: [Diagnostic]] {
+    package var diagnostics: [ConfiguredTarget?: [Diagnostic]] {
         _diagnosticsEngines.withLock { $0.mapValues { $0.diagnostics } }
     }
 
