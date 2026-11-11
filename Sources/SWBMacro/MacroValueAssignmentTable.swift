@@ -100,6 +100,11 @@ public struct MacroValueAssignmentTable: Serializable, Sendable {
 
     /// Adds a mapping from each of the macro-to-value mappings in `otherTable`, inserting them ahead of any already existing assignments in the receiving table.  The other table isn’t affected in any way (in particular, no reference is kept from the receiver to the other table).
     public mutating func pushContentsOf(_ otherTable: MacroValueAssignmentTable) {
+        // Inserting into an empty table preserves the other table's assignments (see `insertCopiesOfMacroValueAssignmentNodes`), so share its dictionary rather than rebuilding it.
+        if valueAssignments.isEmpty {
+            valueAssignments = otherTable.valueAssignments
+            return
+        }
         for (macro, firstAssignment) in otherTable.valueAssignments {
             valueAssignments[macro] = insertCopiesOfMacroValueAssignmentNodes(firstAssignment, inFrontOf: valueAssignments[macro])
         }
