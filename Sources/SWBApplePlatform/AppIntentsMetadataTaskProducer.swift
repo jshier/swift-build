@@ -69,26 +69,36 @@ final class AppIntentsMetadataTaskProducer: PhasedTaskProducer, TaskProducer {
             var metadataDependencyList: Set<Path> = []
             var staticLibraryDependencyList: Set<Path> = []
             if let configuredTarget = self.targetContext.configuredTarget {
-                let dependencies = transitiveClosure([configuredTarget], successors: self.targetContext.globalProductPlan.dependencies(of:))
+                let globalProductPlan = self.targetContext.globalProductPlan
+                // Each target depending on a dependency computes the same paths for it. Whether it's a bundle depends on the spec domain of this target.
+                let memoizationKey = "AppIntentsMetadataPaths:\(self.context.domain)"
+                let dependencies = transitiveClosure([configuredTarget], successors: globalProductPlan.dependencies(of:))
                 for dependency in dependencies.0 {
-                    if let standardTarget = dependency.target as? StandardTarget,
-                       let bundleProductType = self.context.getSpec(standardTarget.productTypeIdentifier),
-                       bundleProductType.conformsTo(identifier: "com.apple.product-type.bundle") {
-                        let targetScope = self.targetContext.globalProductPlan.getTargetSettings(dependency).globalScope
-                        let dependencyMetadataPath = targetScope.evaluate(BuiltinMacros.TARGET_BUILD_DIR)
-                            .join(targetScope.evaluate(BuiltinMacros.UNLOCALIZED_RESOURCES_FOLDER_PATH))
-                            .join("Metadata.appintents/extract.actionsdata")
-
-                        metadataDependencyList.insert(dependencyMetadataPath)
+                    let paths = globalProductPlan.memoizedValue(for: dependency, key: memoizationKey) { () -> (bundle: Path?, staticLibrary: Path?) in
+                        var bundleMetadataPath: Path?
+                        if let standardTarget = dependency.target as? StandardTarget,
+                           let bundleProductType = self.context.getSpec(standardTarget.productTypeIdentifier),
+                           bundleProductType.conformsTo(identifier: "com.apple.product-type.bundle") {
+                            let targetScope = globalProductPlan.getTargetSettings(dependency).globalScope
+                            bundleMetadataPath = targetScope.evaluate(BuiltinMacros.TARGET_BUILD_DIR)
+                                .join(targetScope.evaluate(BuiltinMacros.UNLOCALIZED_RESOURCES_FOLDER_PATH))
+                                .join("Metadata.appintents/extract.actionsdata")
+                        }
+                        var staticLibraryMetadataPath: Path?
+                        let targetScope = globalProductPlan.getTargetSettings(dependency).globalScope
+                        let machOType = targetScope.evaluate(BuiltinMacros.MACH_O_TYPE)
+                        if  machOType == "staticlib" || machOType == "mh_object" {
+                            staticLibraryMetadataPath = targetScope.evaluate(BuiltinMacros.TARGET_BUILD_DIR)
+                                .join(targetScope.evaluate(BuiltinMacros.PRODUCT_MODULE_NAME) + ".appintents")
+                                .join("Metadata.appintents/extract.actionsdata")
+                        }
+                        return (bundleMetadataPath, staticLibraryMetadataPath)
                     }
-                    let targetScope = self.targetContext.globalProductPlan.getTargetSettings(dependency).globalScope
-                    let machOType = targetScope.evaluate(BuiltinMacros.MACH_O_TYPE)
-                    if  machOType == "staticlib" || machOType == "mh_object" {
-                        let dependencyMetadataPath = targetScope.evaluate(BuiltinMacros.TARGET_BUILD_DIR)
-                            .join(targetScope.evaluate(BuiltinMacros.PRODUCT_MODULE_NAME) + ".appintents")
-                            .join("Metadata.appintents/extract.actionsdata")
-
-                        staticLibraryDependencyList.insert(dependencyMetadataPath)
+                    if let bundle = paths.bundle {
+                        metadataDependencyList.insert(bundle)
+                    }
+                    if let staticLibrary = paths.staticLibrary {
+                        staticLibraryDependencyList.insert(staticLibrary)
                     }
                 }
             }

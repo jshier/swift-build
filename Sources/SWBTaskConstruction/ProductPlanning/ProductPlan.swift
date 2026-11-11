@@ -44,6 +44,22 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
         didSet { settingsByTarget.removeAll() }
     }
 
+    private struct MemoizedValueKey: Hashable, Sendable {
+        let configuredTarget: ConfiguredTarget
+        let key: String
+        /// The value's type, so values of different types never share a key, which makes downcasting stored values safe.
+        let valueType: ObjectIdentifier
+    }
+
+    private let memoizedValues = Registry<MemoizedValueKey, Lazy<any Sendable>>()
+
+    /// Returns a value computed from a configured target, memoized for the plan, for task producers that compute the same value from each of their target's dependencies.
+    ///
+    /// - parameter key: Identifies the value, and must include anything it depends on other than the configured target.
+    package func memoizedValue<Value: Sendable>(for configuredTarget: ConfiguredTarget, key: String, _ compute: () -> Value) -> Value {
+        memoizedValues.getOrInsert(MemoizedValueKey(configuredTarget: configuredTarget, key: key, valueType: ObjectIdentifier(Value.self))) { compute() } as! Value
+    }
+
     /// The settings of each configured target, which task producers look up repeatedly, including for other targets. Looking them up in the settings cache compares their parameters, so the lookups are memoized for the plan.
     private let settingsByTarget = Registry<ConfiguredTarget, Lazy<Settings>>()
 
