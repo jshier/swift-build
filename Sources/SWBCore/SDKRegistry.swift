@@ -555,6 +555,9 @@ public final class SDKRegistry: SDKRegistryLookup, CustomStringConvertible, Send
     /// The map of canonical name strings parsed to semantic understandings of an SDK name.
     private let parsedSDKNames = Registry<String, Result<SDK.CanonicalNameComponents, any Error>>()
 
+    /// The newest SDK for each unversioned canonical name, since finding it compares the names of all SDKs. Registering an SDK clears it.
+    private let newestSDKsByUnversionedName = Registry<String, SDK?>()
+
     private func parseSDKName(_ canonicalName: String) throws -> SDK.CanonicalNameComponents {
         try parsedSDKNames.getOrInsert(canonicalName) {
             Result { try SDK.parseSDKName(canonicalName, registry: self) }
@@ -987,6 +990,8 @@ public final class SDKRegistry: SDKRegistryLookup, CustomStringConvertible, Send
 
         platform?.registerSDK(sdk)
 
+        newestSDKsByUnversionedName.removeAll()
+
         return sdk
     }
 
@@ -1071,6 +1076,10 @@ public final class SDKRegistry: SDKRegistryLookup, CustomStringConvertible, Send
         }
 
         // Otherwise, we're looking for an SDK using a placeholder which basically means "look for the newest-version SDK which has the same exact base name, matching suffixes".
+        return newestSDKsByUnversionedName.getOrInsert(canonicalName) { newestSDK(unversionedName: canonicalName) }
+    }
+
+    private func newestSDK(unversionedName canonicalName: String) -> SDK? {
         // Split the requested SDK into pieces.  If we can't, then we return nil.
         guard let components = try? parseSDKName(canonicalName) else {
             return nil
