@@ -1001,7 +1001,8 @@ extension SpecializationParameters {
     @_spi(Testing) public nonisolated func explicitDependencies(for configuredTarget: ConfiguredTarget) -> [Target] {
         let scope = buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target).globalScope
 
-        let filteringContext = TargetDependencyFilteringContext(
+        // Most dependencies have no filters, and computing the platform filter evaluates and parses the target triple.
+        lazy var filteringContext = TargetDependencyFilteringContext(
             currentPlatformFilter: PlatformFilter(scope),
             currentBuildConfigurationFilter: BuildConfigurationFilter(scope)
         )
@@ -1024,12 +1025,12 @@ extension SpecializationParameters {
         }
 
         return configuredTarget.target.dependencies.compactMap { dependency in
-            if !filteringContext.currentPlatformFilter.matches(dependency.platformFilters) {
+            if !dependency.platformFilters.isEmpty, !filteringContext.currentPlatformFilter.matches(dependency.platformFilters) {
                 emitSkippedTargetDependencyDiagnostic(.platformFilter, filteringContext, configuredTarget, dependency)
                 return nil
             }
 
-            if !filteringContext.currentBuildConfigurationFilter.matches(dependency.buildConfigurationFilters) {
+            if !dependency.buildConfigurationFilters.isEmpty, !filteringContext.currentBuildConfigurationFilter.matches(dependency.buildConfigurationFilters) {
                 emitSkippedTargetDependencyDiagnostic(.buildConfigurationFilter, filteringContext, configuredTarget, dependency)
                 return nil
             }
