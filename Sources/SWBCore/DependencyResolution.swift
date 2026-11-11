@@ -417,8 +417,11 @@ extension BuildRequestContext {
 }
 
 extension DependencyResolver {
+    /// The specialization parameters a configured target imposes on its dependencies, memoized for the resolution because every dependency on the target needs them, and computing them looks up its settings.
     nonisolated func specializationParameters(_ configuredTarget: ConfiguredTarget, workspaceContext: WorkspaceContext, buildRequest: BuildRequest, buildRequestContext: BuildRequestContext) -> SpecializationParameters {
-        SpecializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, makeAggregateTargetsTransparentForSpecialization: makeAggregateTargetsTransparentForSpecialization)
+        specializationParametersByConfiguredTarget.getOrInsert(configuredTarget) {
+            SpecializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, makeAggregateTargetsTransparentForSpecialization: makeAggregateTargetsTransparentForSpecialization)
+        }
     }
 }
 
@@ -486,6 +489,8 @@ extension SpecializationParameters {
 
     /// Configured targets for targets in the workspace context mapped by target.  There may be multiple configured targets for a given target, each one configured with different parameters.
     var configuredTargetsByTarget = [Target: Set<ConfiguredTarget>]()
+
+    nonisolated let specializationParametersByConfiguredTarget = Registry<ConfiguredTarget, Lazy<SpecializationParameters>>()
 
     /// The configured targets created by `lookupConfiguredTarget`, in the order they were created.
     private(set) var createdConfiguredTargets = [ConfiguredTarget]()
