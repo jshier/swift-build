@@ -364,7 +364,7 @@ public final class SpecRegistry: Sendable {
     /// Whether the registry has been frozen (mutations are no longer possible). The process will crash if something attempts to mutate it after it has been frozen.
     private let isFrozen = SWBMutex<Bool>(false)
 
-    /// Whether the registry is frozen, readable without taking a lock.
+    /// Whether the registry is frozen, readable without a lock.
     private let isFrozenForLookups = Atomic<Bool>(false)
 
     private struct ProxyLookupKey: Hashable, Sendable {
@@ -376,7 +376,8 @@ public final class SpecRegistry: Sendable {
         let proxy: SpecProxy?
     }
 
-    /// The results of looking up proxies once the registry is frozen, because specs are looked up often, and from many threads at once while planning, and looking one up takes a lock for each domain searched.
+    /// The results of looking up proxies once the registry is frozen. Planning looks up specs often and from many
+    /// threads, and each lookup takes a lock for each domain it searches.
     private let proxyLookupCache = ShardedRegistry<ProxyLookupKey, ProxyLookupResult>()
 
     /// Create a SpecRegistry from all of the specs in the given search paths.

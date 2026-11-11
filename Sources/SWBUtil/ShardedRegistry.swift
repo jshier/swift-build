@@ -12,19 +12,23 @@
 
 public import Synchronization
 
-/// A thread-safe dictionary for values which are read and written from many threads at once, such as caches used during concurrent work.
+/// A thread-safe dictionary for values that many threads read and write at once, such as caches for concurrent work.
 ///
-/// Unlike `Registry`, which has a single lock, the keys are divided among several independently locked shards, so that concurrent accesses rarely contend. Values are computed outside of the lock, so concurrent callers may compute the value for a key more than once, but they all receive the first value stored.
+/// Unlike `Registry`, which has a single lock, keys are divided among independently locked shards, so concurrent
+/// accesses rarely contend. Values are computed outside the lock, so concurrent callers may compute a key's value more
+/// than once, but all of them receive the first value stored.
 public final class ShardedRegistry<Key: Hashable & Sendable, Value: Sendable>: Sendable {
     @usableFromInline final class Shard: Sendable {
         @usableFromInline let values = SWBMutex<[Key: Value]>([:])
-        // Keep each shard's lock on its own cache line, so that accessing one shard doesn't slow down accesses to another.
+        // Pad each shard to more than 128 bytes, so no two shards' locks share a cache line, which is 128 bytes on Apple
+        // silicon, and 64 bytes on Intel (whose prefetcher fetches lines in 128-byte pairs) and most other arm64 cores.
         private let padding: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     }
 
     @usableFromInline let shards: [Shard]
 
-    /// - parameter shardCount: The number of shards, which should be about the number of threads accessing the registry at once.
+    /// - parameter shardCount: The number of shards, about the number of threads expected to access the registry at
+    ///   once.
     public init(shardCount: Int = 32) {
         precondition(shardCount > 0)
         shards = (0..<shardCount).map { _ in Shard() }
@@ -42,7 +46,8 @@ public final class ShardedRegistry<Key: Hashable & Sendable, Value: Sendable>: S
 
     /// Returns the value for the key, computing and storing it if there isn't one.
     ///
-    /// This is inlinable so that clients specialize it, rather than look up the generic metadata of the dictionary at runtime on each call, which contends on a lock in the runtime when called from many threads.
+    /// Inlinable so that clients specialize it. Unspecialized, each call looks up the dictionary's generic metadata at
+    /// runtime, which takes a runtime lock that threads contend on.
     @inlinable
     public func getOrInsert(_ key: Key, _ compute: () throws -> Value) rethrows -> Value {
         let shard = shard(for: key)

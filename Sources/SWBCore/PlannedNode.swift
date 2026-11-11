@@ -85,7 +85,7 @@ private enum PlannedNodeInternKey: Hashable {
 }
 
 // TODO: this should really be some kind of weak map or its lifetime scoped to a build description
-/// Planned nodes are created from many threads at once while planning, so the interning table is sharded.
+/// Planning creates nodes from many threads at once, so the interning table is sharded.
 private let internedPlannedNodes = ShardedRegistry<PlannedNodeInternKey, any PlannedNode>(shardCount: 64)
 
 /// Returns a node representing `path`.

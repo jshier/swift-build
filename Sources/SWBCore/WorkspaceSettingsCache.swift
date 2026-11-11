@@ -20,8 +20,6 @@ final class WorkspaceSettingsCache: Sendable {
     init(workspaceContext: WorkspaceContext, macroConfigFileLoader: MacroConfigFileLoader) {
         self.workspaceContext = workspaceContext
         self.macroConfigFileLoader = macroConfigFileLoader
-        self.persistentSettingsCache = HeavyCache(timeToLive: Tuning.workspaceSettingsCacheTTL)
-        self.settingsCache = ScopedKeepAliveCache(persistentSettingsCache)
     }
 
     struct MacroConfigCacheKey: Equatable, Hashable {
@@ -104,7 +102,8 @@ final class WorkspaceSettingsCache: Sendable {
         }
     }
 
-    /// Get the cached bound properties of the settings for the given parameters, project, target, and purpose, which settings that differ only in other inputs share.
+    /// Get the cached bound properties of the settings for the given parameters, project, target, and purpose. Settings
+    /// that differ only in their other inputs share them.
     internal func getCachedBoundProperties(_ parameters: BuildParameters, project: Project, target: Target?, purpose: SettingsPurpose, buildRequestContext: BuildRequestContext, filesSignature: ([Path]) -> FilesSignature) -> Settings.CachedBoundProperties {
         let key = SettingsCacheKey(parameters: parameters, projectGUID: project.guid, targetGUID: target?.guid, purpose: purpose, provisioningTaskInputs: nil, impartedBuildProperties: nil, artifactBundleInfo: nil, compilationCachingInfo: nil)
         return boundPropertiesCache.getOrInsert(key, isValid: { properties in filesSignature(properties.inputPathsAffectingSettings) == properties.inputPathsAffectingSettingsSignature }) {
@@ -115,15 +114,7 @@ final class WorkspaceSettingsCache: Sendable {
     private let boundPropertiesCache = ScopedKeepAliveCache(HeavyCache<SettingsCacheKey, Lazy<Settings.CachedBoundProperties>>(timeToLive: Tuning.workspaceSettingsCacheTTL))
 
     /// We use a `Lazy` as the value type to allow concurrent settings construction while still ensuring we only ever construct the settings for a particular configuration once, e.g. concurrent access to already constructed settings as well as concurrent setting construction.
-    private let settingsCache: ScopedKeepAliveCache<SettingsCacheKey, Lazy<Settings>, HeavyCache<SettingsCacheKey, Lazy<Settings>>>
-
-    /// The cache underlying `settingsCache`, which outlives the scopes it keeps settings alive for.
-    private let persistentSettingsCache: HeavyCache<SettingsCacheKey, Lazy<Settings>>
-
-    /// Whether the settings for the given parameters, project, and target are cached, or being computed, without computing them.
-    func hasCachedSettings(_ parameters: BuildParameters, project: Project, target: Target?) -> Bool {
-        persistentSettingsCache.contains(SettingsCacheKey(parameters: parameters, projectGUID: project.guid, targetGUID: target?.guid, purpose: .build, provisioningTaskInputs: nil, impartedBuildProperties: nil, artifactBundleInfo: nil, compilationCachingInfo: nil))
-    }
+    private let settingsCache = ScopedKeepAliveCache(HeavyCache<SettingsCacheKey, Lazy<Settings>>(timeToLive: Tuning.workspaceSettingsCacheTTL))
 
     func keepAlive<R>(_ f: () throws -> R) rethrows -> R {
         try settingsCache.keepAlive {

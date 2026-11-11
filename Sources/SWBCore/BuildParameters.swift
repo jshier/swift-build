@@ -136,7 +136,8 @@ public struct BuildParameters: Hashable, SerializableCodable, Sendable {
         return isDebug ? "Debug" : "Release"
     }
 
-    /// Returns these parameters with some of their properties replaced. This is cheaper than creating new parameters from all of the properties, because the package configuration override doesn't need to be computed again.
+    /// Returns these parameters with some properties replaced, without recomputing the package configuration override
+    /// as the initializer does.
     private func replacing(activeRunDestination: RunDestinationInfo?, activeArchitecture: String?, overrides: [String: String], commandLineOverrides: [String: String], commandLineConfigOverridesPath: Path?, commandLineConfigOverrides: [String: String], environmentConfigOverridesPath: Path?, environmentConfigOverrides: [String: String]) -> BuildParameters {
         var parameters = self
         parameters.activeRunDestination = activeRunDestination

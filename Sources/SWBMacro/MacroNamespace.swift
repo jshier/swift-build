@@ -509,7 +509,8 @@ public final class MacroNamespace: CustomDebugStringConvertible, Encodable, Send
     }
 
     private static func endInterning() {
-        // Release the interned expressions when the last request ends. An expression interned by a parse that raced with this stays interned until the next time interning ends, which doesn't affect the parsed expressions.
+        // Release the interned expressions when the last request ends. An expression interned by a parse racing with
+        // this stays interned until interning next ends, which is harmless.
         if activeInterningRequests.subtract(1, ordering: .relaxed).newValue == 0 {
             stringExpressionInterningTable.removeAll()
         }
@@ -518,7 +519,8 @@ public final class MacroNamespace: CustomDebugStringConvertible, Encodable, Send
     /// The number of active interning requests. Expressions are interned while this is greater than zero.
     static let activeInterningRequests = Atomic<Int>(0)
 
-    /// The table used for parsed string expression interning, which is sharded so that settings can be constructed concurrently without contending on a single lock.
+    /// The table for interning parsed string expressions. It's sharded so that settings constructed concurrently don't
+    /// contend on one lock.
     static let stringExpressionInterningTable = ShardedRegistry<String, MacroStringExpression>()
 }
 

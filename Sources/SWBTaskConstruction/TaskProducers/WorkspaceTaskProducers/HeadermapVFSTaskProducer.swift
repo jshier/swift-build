@@ -34,7 +34,10 @@ final class HeadermapVFSTaskProducer: StandardTaskProducer, TaskProducer {
 
         var tasks = [any PlannedTask]()
         do {
-            // The contents of a VFS depend only on the project of the target, its effective platform, and whether the index build arena is enabled, which most targets share, and computing them visits each target in the project. So compute them once for each of these, and report the diagnostics of computing them for each target, as if they had been computed for each.
+            // A VFS's contents depend only on the target's project, its effective platform, and whether the index build
+            // arena is enabled, which most targets share, and computing them visits every target in the project. So
+            // compute them once for each combination, and report the resulting diagnostics for every target that shares
+            // it, as if each had computed them.
             struct VFSInputs: Hashable {
                 let path: Path
                 let project: ObjectIdentifier
@@ -49,36 +52,38 @@ final class HeadermapVFSTaskProducer: StandardTaskProducer, TaskProducer {
                 }
                 return VFSInputs(path: self.context.makeAbsolute(vfsSetting), project: ObjectIdentifier(targetContext.workspaceContext.workspace.project(for: target)), effectivePlatformName: targetScope.evaluate(BuiltinMacros.EFFECTIVE_PLATFORM_NAME), enablesIndexBuildArena: targetScope.evaluate(BuiltinMacros.INDEX_ENABLE_BUILD_ARENA))
             }
-            var firstTargetContextByInputs = [VFSInputs: TaskProducerContext]()
-            var uniqueInputs = [VFSInputs]()
+            // Each distinct set of inputs, with the first target context that has them.
+            var seenInputs = Set<VFSInputs>()
+            var uniqueInputs = [(inputs: VFSInputs, targetContext: TaskProducerContext)]()
             for (targetContext, inputs) in zip(targetContexts, inputsByTargetContext) {
-                if let inputs, firstTargetContextByInputs[inputs] == nil {
-                    firstTargetContextByInputs[inputs] = targetContext
-                    uniqueInputs.append(inputs)
+                if let inputs, seenInputs.insert(inputs).inserted {
+                    uniqueInputs.append((inputs, targetContext))
                 }
             }
 
             typealias VFSError = (message: String, location: Diagnostic.Location, component: Component)
-            let vfsContents = try await uniqueInputs.concurrentMap(maximumParallelism: 100) { (inputs: VFSInputs) async throws -> (contents: ByteString, errors: [VFSError]) in
+            let vfsContents = try await uniqueInputs.concurrentMap(maximumParallelism: 100) { (unique: (inputs: VFSInputs, targetContext: TaskProducerContext)) async throws -> (contents: ByteString, errors: [VFSError]) in
                 let errors = SWBMutex<[VFSError]>([])
-                let contents = try await firstTargetContextByInputs[inputs]!.constructVFSContents { message, location, component in
+                let contents = try await unique.targetContext.constructVFSContents { message, location, component in
                     errors.withLock { $0.append((message, location, component)) }
                 }
                 return (contents, errors.withLock { $0 })
             }
-            let vfsContentsByInputs = Dictionary(uniqueKeysWithValues: zip(uniqueInputs, vfsContents))
+            let vfsContentsByInputs = Dictionary(uniqueKeysWithValues: zip(uniqueInputs.map(\.inputs), vfsContents))
             for (targetContext, inputs) in zip(targetContexts, inputsByTargetContext) {
                 for error in inputs.flatMap({ vfsContentsByInputs[$0]?.errors }) ?? [] {
                     targetContext.error(error.message, location: error.location, component: error.component)
                 }
             }
 
-            let vfsContentsByPath = try Dictionary(uniqueInputs.map { ($0.path, vfsContentsByInputs[$0]!.contents) }, uniquingKeysWith: { first, second in
-                guard first == second else {
-                    throw StubError.error("Unexpected difference in VFS content.\nFirst: \(first.asString)\nSecond:\(second.asString)")
-                }
-                return first
-            })
+            let vfsContentsByPath = try Dictionary(
+                zip(uniqueInputs, vfsContents).map { unique, vfs in (unique.inputs.path, vfs.contents) },
+                uniquingKeysWith: { first, second in
+                    guard first == second else {
+                        throw StubError.error("Unexpected difference in VFS content.\nFirst: \(first.asString)\nSecond:\(second.asString)")
+                    }
+                    return first
+                })
 
             for (vfsPath, contents) in vfsContentsByPath {
                 await appendGeneratedTasks(&tasks) { delegate in
@@ -99,7 +104,7 @@ final class HeadermapVFSTaskProducer: StandardTaskProducer, TaskProducer {
 }
 
 extension TaskProducerContext {
-    /// - parameter reportError: Called to report errors instead of emitting them for this target.
+    /// - parameter reportError: If given, called with errors instead of emitting them for this target.
     func constructVFSContents(reportError: (@Sendable (_ message: String, _ location: Diagnostic.Location, _ component: Component) -> Void)? = nil) async throws -> ByteString {
         let vfs = VFS()
         // For VFS purposes, always map to the temporary copies of the module maps, they may have been autogenerated or modified from the sources.
@@ -114,7 +119,7 @@ extension TaskProducerContext {
         return try PropertyListItem(vfs.toVFSOverlay()).asJSONFragment()
     }
 
-    /// - parameter reportError: Called to report errors instead of emitting them for this target.
+    /// - parameter reportError: If given, called with errors instead of emitting them for this target.
     func forEachBuildProductToSourceMapping(mapToTempFilesOnly: Bool, reportError: (@Sendable (_ message: String, _ location: Diagnostic.Location, _ component: Component) -> Void)? = nil, _ body: ((target: SWBCore.Target, isActiveTarget: Bool, builtFile: Path, originalSource: Path)) throws -> Void) async throws {
 
         let index = try await workspaceContext.headerIndex
@@ -208,15 +213,17 @@ extension TaskProducerContext {
                 let contentsFolderString = scope.evaluate(BuiltinMacros.CONTENTS_FOLDER_PATH).str
                 let wrapperNameString = scope.evaluate(BuiltinMacros.WRAPPER_NAME).str
 
-                let moduleInfo = GlobalProductPlan.computeModuleInfo(workspaceContext: globalProductPlan.planRequest.workspaceContext, target: target, settings: settings, diagnosticHandler: { message, location, component, essential in
-                    if essential {
-                        if let reportError {
-                            reportError(message, location, component)
-                        } else {
-                            error(message, location: location, component: component)
+                let moduleInfo = GlobalProductPlan.computeModuleInfo(
+                    workspaceContext: globalProductPlan.planRequest.workspaceContext, target: target, settings: settings,
+                    diagnosticHandler: { message, location, component, essential in
+                        if essential {
+                            if let reportError {
+                                reportError(message, location, component)
+                            } else {
+                                error(message, location: location, component: component)
+                            }
                         }
-                    }
-                })
+                    })
                 if let moduleInfo = moduleInfo {
                     let moduleMapSourcePath = mapToTempFilesOnly ? moduleInfo.moduleMapPaths.tmpPath : moduleInfo.moduleMapPaths.sourcePath
                     if !moduleMapSourcePath.isEmpty {

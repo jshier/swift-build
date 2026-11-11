@@ -121,7 +121,7 @@ actor LinkageDependencyResolver {
     internal let resolver: DependencyResolver
 
     init(workspaceContext: WorkspaceContext, buildRequest: BuildRequest, buildRequestContext: BuildRequestContext, delegate: any TargetDependencyResolverDelegate) {
-        // Concurrent resolution only contends on the resolver actor, so resolve serially, which is faster and deterministic.
+        // Concurrent resolution only contends on the resolver actor, so resolve serially: it's faster and deterministic.
         resolver = DependencyResolver(workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, delegate: delegate, concurrent: false)
     }
 
@@ -136,7 +136,8 @@ actor LinkageDependencyResolver {
             }
         }
 
-        // Each target is inserted at the front if it isn't already present, so the result is the reverse of the order the targets first appear in. Build it in that order and reverse it, since inserting at the front of an ordered set is linear in its size.
+        // The result is the reverse of the order in which targets first appear. Build that order and reverse it,
+        // because inserting at the front of an ordered set is linear in its size.
         var targetsInFirstAppearanceOrder = OrderedSet<ConfiguredTarget>()
         for (target, dependencies) in dependenciesPerTarget {
             targetsInFirstAppearanceOrder.append(target)
@@ -259,11 +260,12 @@ actor LinkageDependencyResolver {
         }
 
         // If we're resolving implicit dependencies, build up the names of products of these targets, so we don't try to resolve implicit dependencies for any of them.
-        let productNamesOfExplicitDependencies = Set<String>(immediateDependencies.compactMap { dependency -> String? in
-            guard let standardTarget = dependency.target as? StandardTarget else { return nil }
-            // The product reference name may itself be a build setting expression, so evaluate it in the dependency's scope to obtain the concrete basename.
-            return standardTarget.productReference.evaluatedName(computeSettings: { resolver.settings(for: dependency) })
-        })
+        let productNamesOfExplicitDependencies = Set<String>(
+            immediateDependencies.compactMap { dependency -> String? in
+                guard let standardTarget = dependency.target as? StandardTarget else { return nil }
+                // The product reference name may itself be a build setting expression, so evaluate it in the dependency's scope to obtain the concrete basename.
+                return standardTarget.productReference.evaluatedName(computeSettings: { resolver.settings(for: dependency) })
+            })
 
         // Get information about the configured target which we need to determine its implicit dependencies.
         let buildFileFilter = LinkageDependencyBuildFileFilteringContext(scope: configuredTargetSettings.globalScope)

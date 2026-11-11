@@ -29,7 +29,8 @@ public struct LLVMTriple: Decodable, Hashable, Comparable, Sendable, CustomStrin
     /// Initialize a target triple by parsing it from a string.
     /// This will throw an error if the string is malformed.
     public init(_ string: String) throws {
-        // The triple is three or four non-empty components separated by dashes. This is parsed by hand rather than with a regex literal, which is compiled each time it's evaluated.
+        // A triple is three or four non-empty, dash-separated components. Split it by hand, because a regex literal is
+        // compiled every time it's evaluated.
         let components = string.split(separator: "-", omittingEmptySubsequences: false)
         guard components.count == 3 || components.count == 4, !components.contains(where: { $0.isEmpty }) else {
             throw LLVMTripleError.invalidTripleStringFormat(string)

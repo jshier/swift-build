@@ -500,7 +500,8 @@ if isStaticBuild {
     }
 }
 
-// `SWB_ENABLE_RESOLUTION_BENCHMARK` adds a benchmark of dependency resolution and planning, which links the testing support library, so it isn't built by default. On macOS, set `DEVELOPER_DIR` to the Xcode to find the Testing framework in.
+// `SWB_ENABLE_RESOLUTION_BENCHMARK` adds a benchmark of dependency resolution and planning. It links the testing
+// support library, so it isn't built by default. On macOS, `DEVELOPER_DIR` selects the Xcode with the Testing framework.
 if Context.environment["SWB_ENABLE_RESOLUTION_BENCHMARK"] != nil {
     let developerDirectory = Context.environment["DEVELOPER_DIR"] ?? "/Applications/Xcode.app/Contents/Developer"
     let platformDirectory = "\(developerDirectory)/Platforms/MacOSX.platform/Developer"

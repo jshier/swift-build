@@ -556,7 +556,8 @@ public final class SDKRegistry: SDKRegistryLookup, CustomStringConvertible, Send
     /// The map of canonical name strings parsed to semantic understandings of an SDK name.
     private let parsedSDKNames = Registry<String, Result<SDK.CanonicalNameComponents, any Error>>()
 
-    /// The results of looking up SDKs by a name without a version, which compares the names of all SDKs, along with the number of SDKs registered when they were looked up, so that registering an SDK invalidates them.
+    /// The results of looking up SDKs by unversioned name, which compares the names of all SDKs. The registration count
+    /// invalidates them when an SDK is registered.
     private let newestSDKsByUnversionedName = SWBMutex<(registrations: Int, sdks: [String: SDK?])>((0, [:]))
 
     private func parseSDKName(_ canonicalName: String) throws -> SDK.CanonicalNameComponents {

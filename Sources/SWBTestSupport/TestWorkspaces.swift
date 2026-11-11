@@ -1382,10 +1382,12 @@ package final class TestWorkspace: Resolver, TestInternalItem, Sendable {
         return overriddenGuid ?? "\(type(of: self).guidCode)\(guidIdentifier)"
     }
 
-    /// The first target with each name, and the first standard target with each product reference name along with the index of its project, so that resolving names when converting large workspaces isn't quadratic.
-    private nonisolated(unsafe) let targetsByName: [String: any TestInternalTarget]
-    private nonisolated(unsafe) let targetsByProductReferenceName: [String: (projectIndex: Int, target: TestStandardTarget)]
-    private nonisolated(unsafe) let projectsByTarget: [ObjectIdentifier: TestProject]
+    /// Indexes of the projects' targets, so resolving names in large workspaces isn't quadratic: the first target
+    /// with each name, the first standard target with each product reference name and its project's index, and the
+    /// project of each target.
+    private let targetsByName: [String: any TestInternalTarget]
+    private let targetsByProductReferenceName: [String: (projectIndex: Int, target: TestStandardTarget)]
+    private let projectsByTarget: [ObjectIdentifier: TestProject]
 
     package init(_ name: String, guid: String? = nil, sourceRoot: Path? = nil, projects: [TestProject], sourceLocation: SourceLocation = #_sourceLocation) {
         self.name = name
@@ -1501,7 +1503,9 @@ package final class TestWorkspace: Resolver, TestInternalItem, Sendable {
     }
 
     fileprivate func findAuto(_ name: String) throws -> TestBuildableItem {
-        // Product references take precedence over the files in the group trees of their projects and later ones.
+        // A product reference takes precedence over the group trees of its project and later projects.
+        //
+        // FIXME: <rdar://119010301> This should not resolve to a product reference if the target is in a different project (unless a project reference is involved, which I don't think the test model presently supports).  This can result in subtle issues not being caught by the test when logic which relies on using a product reference (or not) is a factor.  For example some of the mergeable libraries logic.
         let productReference = targetsByProductReferenceName[name]
         for (projectIndex, project) in projects.enumerated() {
             if let productReference, productReference.projectIndex == projectIndex {

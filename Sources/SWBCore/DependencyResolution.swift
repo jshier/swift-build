@@ -185,8 +185,9 @@ struct SpecializationParameters: Hashable, CustomStringConvertible {
     private func computeEffectiveSDKRootOverride(platform: Platform, originalParameters: BuildParameters, workspaceContext: WorkspaceContext) -> String? {
         let sdkNameBase: String?
         if let runDestination = originalParameters.activeRunDestination,
-           let runDestinationSDK = try? workspaceContext.sdkRegistry.lookup(nameOrPath: runDestination.sdk, basePath: Path.root, activeRunDestination: runDestination),
-           Self.platform(forSDK: runDestinationSDK, workspaceContext: workspaceContext) === platform {
+            let runDestinationSDK = try? workspaceContext.sdkRegistry.lookup(nameOrPath: runDestination.sdk, basePath: Path.root, activeRunDestination: runDestination),
+            Self.platform(forSDK: runDestinationSDK, workspaceContext: workspaceContext) === platform
+        {
             sdkNameBase = runDestinationSDK.canonicalName
         } else {
             sdkNameBase = platform.sdkCanonicalName
@@ -222,14 +223,14 @@ struct SpecializationParameters: Hashable, CustomStringConvertible {
         isCompatible(with: configuredTarget, platform: settings.platform, sdk: settings.sdk, sdkVariant: settings.sdkVariant, toolchains: settings.toolchains, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext)
     }
 
-    /// Check if a configured target can be used when this specialization is required, given the platform, SDK, SDK variant, and toolchains of its settings.
+    /// Check if a configured target can be used when this specialization is required, given the platform, SDK, SDK
+    /// variant, and toolchains of its settings.
     func isCompatible(with configuredTarget: ConfiguredTarget, platform: Platform?, sdk: SDK?, sdkVariant: SDKVariant?, toolchains: [Toolchain], workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext) -> Bool {
         guard (self.platform == nil || self.platform === platform) && (self.sdkVariant == nil || self.sdkVariant?.name == sdkVariant?.name) else {
             return false
         }
         let toolchain = effectiveToolchainOverride(originalParameters: configuredTarget.parameters, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext)
-        return (toolchain == nil || toolchain == toolchains.map({ $0.identifier })) &&
-        (canonicalNameSuffix == nil || canonicalNameSuffix?.nilIfEmpty == sdk?.canonicalNameSuffix)
+        return (toolchain == nil || toolchain == toolchains.map({ $0.identifier })) && (canonicalNameSuffix == nil || canonicalNameSuffix?.nilIfEmpty == sdk?.canonicalNameSuffix)
     }
 
     /// Return an effective set of specialization parameters based on a specific target-dependency pair.
@@ -437,7 +438,8 @@ extension BuildRequestContext {
 }
 
 extension DependencyResolver {
-    /// The specialization parameters a configured target imposes on its dependencies, which are memoized for the resolution because they're needed for each dependency on the target.
+    /// The specialization parameters a configured target imposes on its dependencies, memoized for the resolution
+    /// because every dependency on the target needs them.
     nonisolated func specializationParameters(_ configuredTarget: ConfiguredTarget, workspaceContext: WorkspaceContext, buildRequest: BuildRequest, buildRequestContext: BuildRequestContext) -> SpecializationParameters {
         specializationParametersByConfiguredTarget.getOrInsert(configuredTarget) {
             SpecializationParameters(configuredTarget, workspaceContext: workspaceContext, buildRequest: buildRequest, buildRequestContext: buildRequestContext, makeAggregateTargetsTransparentForSpecialization: makeAggregateTargetsTransparentForSpecialization)
@@ -514,16 +516,18 @@ extension SpecializationParameters {
         update(&configuredTargetsByTarget)
     }
 
-    /// The configured targets created by `lookupConfiguredTarget`, in the order they were created.
+    /// The configured targets created by `lookupConfiguredTarget`, in creation order.
     private(set) var createdConfiguredTargets = [ConfiguredTarget]()
 
-    /// The number of configured targets created by the linkage dependency resolver for implicit dependencies which have been added to this resolver.
+    /// How many of the linkage dependency resolver's created configured targets have been merged into this resolver,
+    /// for implicit dependencies.
     var mergedLinkageConfiguredTargetCount = 0
 
     /// Top-level targets get defaults imposed, in case that they are themselves using "auto" anywhere.
     let defaultImposedParameters: SpecializationParameters
 
-    /// The settings of configured targets for their own parameters, which resolution looks up repeatedly, memoized for the resolution because looking them up in the settings cache compares the build parameters.
+    /// The settings of configured targets for their own parameters, memoized for the resolution, which looks them up
+    /// repeatedly. Looking them up in the settings cache compares build parameters, which is relatively expensive.
     nonisolated let settingsByConfiguredTarget = ShardedRegistry<ConfiguredTarget, Settings>()
 
     /// Returns the settings of a configured target for its own parameters.
@@ -566,7 +570,8 @@ extension SpecializationParameters {
     let disableConcurrentDependencyResolution: Bool
     let makeAggregateTargetsTransparentForSpecialization = UserDefaults.makeAggregateTargetsTransparentForSpecialization
 
-    /// - parameter concurrent: Whether to resolve dependencies concurrently, unless disabled by the user default. Resolution whose settings have already been computed is faster serially.
+    /// - parameter concurrent: Whether to resolve dependencies concurrently, unless the user default disables it.
+    ///   Resolution is faster serially when settings are already computed.
     init(workspaceContext: WorkspaceContext, buildRequest: BuildRequest, buildRequestContext: BuildRequestContext, delegate: any TargetDependencyResolverDelegate, concurrent: Bool = true) {
         self.disableConcurrentDependencyResolution = !concurrent || UserDefaults.disableConcurrentDependencyResolution
         self.buildRequest = buildRequest
@@ -639,7 +644,7 @@ extension SpecializationParameters {
 
     /// Add the superimposed overrides in `specialization` to be imposed on the target in `configuredTarget` and other instances of that target which match this `configuredTarget`.
     func addSuperimposedProperties(for configuredTarget: ConfiguredTarget, superimposedProperties: SuperimposedProperties?) {
-        // Superimposed properties which don't merge the target don't override any settings, so there's nothing to impose.
+        // Only mergeable library properties override settings, so there's nothing to impose otherwise.
         guard let superimposedProperties, superimposedProperties.mergeableLibrary else {
             return
         }
@@ -716,7 +721,7 @@ extension SpecializationParameters {
             return true
         }
 
-        // This is checked for each platform for each target, and for each dependency on a target, so memoize it.
+        // This is checked for each target on each platform, and for each dependency on a target, so memoize it.
         return indexSuitability.getOrInsert(IndexSuitabilityKey(target: ObjectIdentifier(target), parameters: parameters, imposedParameters: imposedParameters)) {
             computeIsTargetSuitableForPlatformForIndex(target, parameters: parameters, imposedParameters: imposedParameters)
         }
@@ -868,7 +873,8 @@ extension SpecializationParameters {
         if let configuredTargets = configuredTargetsByTarget[forTarget], !isTopLevelLookup {
             for ct in configuredTargets {
                 if ct.specializeGuidForActiveRunDestination && parameters.activeRunDestination != ct.parameters.activeRunDestination { continue }
-                // Only the platform, SDK, SDK variant, and toolchains of the settings are needed, which are cheaper to compute than the settings.
+                // Only the platform, SDK, SDK variant, and toolchains of the settings are needed, which are cheaper to
+                // compute than the settings.
                 let parametersWithoutRunDestination = ct.parameters.replacing(activeRunDestination: nil, activeArchitecture: nil)
                 let properties = buildRequestContext.getCachedBoundPlatformProperties(parametersWithoutRunDestination, target: ct.target)
                 if specialization.isCompatible(with: ct, platform: properties.platform, sdk: properties.sdk, sdkVariant: properties.sdkVariant, toolchains: properties.toolchains, workspaceContext: workspaceContext, buildRequestContext: buildRequestContext) {
@@ -901,9 +907,12 @@ extension SpecializationParameters {
         return buildRequest.parameters.replacing(activeRunDestination: platformParams.activeRunDestination, activeArchitecture: platformParams.activeArchitecture)
     }
 
-    /// Computes the parameters of a new configured target for `forTarget` with `specialization` imposed on them, when there's no existing compatible configured target.
+    /// Computes the parameters of a new configured target for `forTarget` with `specialization` imposed, for when
+    /// there's no compatible configured target.
     ///
-    /// This doesn't depend on the configured targets created so far, so it can be computed concurrently, or speculatively to compute the settings that resolution will need. Speculative callers pass `false` for `emitDiagnostics`, so that problems with the specialization are only reported once.
+    /// This doesn't depend on the configured targets created so far, so it can run concurrently, or speculatively to
+    /// compute the settings resolution will need. Speculative callers pass `false` for `emitDiagnostics`, so problems
+    /// with the specialization are reported only once.
     nonisolated func specializedConfiguration(_ forTarget: Target, parameters: BuildParameters, specialization: SpecializationParameters, emitDiagnostics: Bool) -> (parameters: BuildParameters, superimposedProperties: SuperimposedProperties?) {
         // Filter any overrides from the parameters, because they can shadow any original "auto" values.
         let filteredParameters = parameters.withoutOverrides
@@ -1085,19 +1094,12 @@ extension SpecializationParameters {
     @_spi(Testing) public nonisolated func explicitDependencies(for configuredTarget: ConfiguredTarget) -> [Target] {
         let scope = self.settings(for: configuredTarget).globalScope
 
-        // The filters are only needed by dependencies which have filters, and the platform filter is relatively expensive to compute, so compute them only if needed.
-        var _filteringContext: TargetDependencyFilteringContext? = nil
-        func filteringContext() -> TargetDependencyFilteringContext {
-            if let _filteringContext {
-                return _filteringContext
-            }
-            let filteringContext = TargetDependencyFilteringContext(
-                currentPlatformFilter: PlatformFilter(scope),
-                currentBuildConfigurationFilter: BuildConfigurationFilter(scope)
-            )
-            _filteringContext = filteringContext
-            return filteringContext
-        }
+        // Only dependencies with filters, or diagnostics about skipped dependencies, need the filters, and the platform
+        // filter is relatively expensive to compute.
+        lazy var filteringContext = TargetDependencyFilteringContext(
+            currentPlatformFilter: PlatformFilter(scope),
+            currentBuildConfigurationFilter: BuildConfigurationFilter(scope)
+        )
         let excludedExplicitDependencies = scope.evaluate(BuiltinMacros.EXCLUDED_EXPLICIT_TARGET_DEPENDENCIES)
         let includedExplicitDependencies = scope.evaluate(BuiltinMacros.INCLUDED_EXPLICIT_TARGET_DEPENDENCIES)
 
@@ -1117,13 +1119,13 @@ extension SpecializationParameters {
         }
 
         return configuredTarget.target.dependencies.compactMap { dependency in
-            if !dependency.platformFilters.isEmpty, !filteringContext().currentPlatformFilter.matches(dependency.platformFilters) {
-                emitSkippedTargetDependencyDiagnostic(.platformFilter, filteringContext(), configuredTarget, dependency)
+            if !dependency.platformFilters.isEmpty, !filteringContext.currentPlatformFilter.matches(dependency.platformFilters) {
+                emitSkippedTargetDependencyDiagnostic(.platformFilter, filteringContext, configuredTarget, dependency)
                 return nil
             }
 
-            if !dependency.buildConfigurationFilters.isEmpty, !filteringContext().currentBuildConfigurationFilter.matches(dependency.buildConfigurationFilters) {
-                emitSkippedTargetDependencyDiagnostic(.buildConfigurationFilter, filteringContext(), configuredTarget, dependency)
+            if !dependency.buildConfigurationFilters.isEmpty, !filteringContext.currentBuildConfigurationFilter.matches(dependency.buildConfigurationFilters) {
+                emitSkippedTargetDependencyDiagnostic(.buildConfigurationFilter, filteringContext, configuredTarget, dependency)
                 return nil
             }
 
@@ -1131,14 +1133,14 @@ extension SpecializationParameters {
                 // If a target has a direct dependency GUID which is missing, then it is silently skipped.
                 //
                 // FIXME: We should probably emit a hard error here for package dependencies.
-                emitSkippedTargetDependencyDiagnostic(.notFound, filteringContext(), configuredTarget, dependency)
+                emitSkippedTargetDependencyDiagnostic(.notFound, filteringContext, configuredTarget, dependency)
                 return nil
             }
 
             let actualTarget = workspaceContext.workspace.dynamicTarget(for: target, dynamicallyBuildingTargets: dynamicallyBuildingTargets)
 
             if isExcludedByName(actualTarget.name) {
-                emitSkippedTargetDependencyDiagnostic(.excludedTargetDependency, filteringContext(), configuredTarget, dependency)
+                emitSkippedTargetDependencyDiagnostic(.excludedTargetDependency, filteringContext, configuredTarget, dependency)
                 return nil
             }
 

@@ -207,13 +207,13 @@ public protocol PluginManager: Sendable {
 private final class ImmutablePluginManager: Sendable, PluginManager {
     private let loadedPlugins: [String: Path]
     public let loadingDiagnostics: [Diagnostic]
-    /// The extensions of each extension point, keyed by the type of the extension point, in a stable order.
+    /// The extensions of each extension point type, in a stable order.
     private let extensionsByExtensionPointType: [ObjectIdentifier: [any Sendable]]
 
     @PluginExtensionSystemActor public init(pluginManager: MutablePluginManager) {
         self.loadedPlugins = pluginManager.loadedPlugins
         self.loadingDiagnostics = pluginManager.loadingDiagnostics
-        // Extensions are looked up often, for example while constructing settings, so group and sort them once.
+        // Extensions are looked up often, such as while constructing settings, so group and sort them once.
         var extensionsByExtensionPointType = [ObjectIdentifier: [any Sendable]]()
         for (key, value) in pluginManager.extensions {
             extensionsByExtensionPointType[ObjectIdentifier(type(of: key.instance)), default: []].append(contentsOf: value)

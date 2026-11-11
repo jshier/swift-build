@@ -10,19 +10,24 @@
 //
 //===----------------------------------------------------------------------===//
 
-// A benchmark of target dependency graph resolution and build planning, for generated graphs of a given size: wall time, instructions, cycles, peak memory, and optionally heap allocations.
+// A benchmark of target dependency graph resolution and build planning for generated graphs of a given size. It
+// reports wall time, instructions, cycles, peak memory, and optionally heap allocations.
 //
 // Build it with `SWB_ENABLE_RESOLUTION_BENCHMARK=1 swift build -c release --product SWBResolutionBench`.
 //
-// usage: SWBResolutionBench [--scenario hosttool|multiplatform|implicit|index|packages] [--targets N] [--iterations N]
-//                           [--mode cold|warm] [--linkage] [--plan] [--allocs] [--dump FILE] [--plan-dump FILE] [--quiet]
+// usage: SWBResolutionBench [--scenario hosttool|multiplatform|implicit|index|packages] [--targets N]
+//                           [--iterations N] [--mode cold|warm] [--linkage] [--plan] [--allocs] [--dump FILE]
+//                           [--plan-dump FILE] [--quiet]
 //
 //   --scenario     hosttool: an iOS app whose frameworks and libraries use a host tool with its own dependencies.
 //                  multiplatform: the same, with an embedded watchOS app sharing libraries with the iOS app.
-//                  implicit: the same as hosttool, with half of the dependencies implicit, through the Frameworks build phase.
-//                  index: the index workspace description of the hosttool graph, which configures each target for each platform.
+//                  implicit: the same as hosttool, with half of the dependencies implied by the Frameworks build
+//                  phase.
+//                  index: the index workspace description of the hosttool graph, which configures each target for
+//                  each platform.
 //                  packages: an iOS app whose frameworks depend on the products of a package.
-//   --mode         warm (the default) resolves with the settings of the graph cached, as for a build within a minute of the previous one; cold resolves with no cached settings.
+//   --mode         warm (the default) resolves with the graph's settings cached, as for a build within a minute of
+//                  the previous one; cold resolves with no cached settings.
 //   --linkage      resolves the target linkage graph instead.
 //   --plan         also plans the build, and reports the time to do so separately.
 //   --allocs       counts heap allocations, which slows down resolution, especially concurrent resolution.
@@ -46,12 +51,13 @@ let allocationCount = Atomic<Int>(0)
 let allocationBytes = Atomic<Int>(0)
 typealias MallocLogger = @convention(c) (UInt32, UInt, UInt, UInt, UInt, UInt32) -> Void
 let mallocLogger: MallocLogger = { type, _, size, reallocSize, _, _ in
-    // MALLOC_LOG_TYPE_ALLOCATE = 2, MALLOC_LOG_TYPE_DEALLOCATE = 4 (both for realloc, with the new size in the third argument).
+    // MALLOC_LOG_TYPE_ALLOCATE = 2, MALLOC_LOG_TYPE_DEALLOCATE = 4; realloc sets both, with the new size in the
+    // third argument.
     guard type & 2 != 0 else { return }
     allocationCount.add(1, ordering: .relaxed)
     allocationBytes.add(Int(type & 4 != 0 ? reallocSize : size), ordering: .relaxed)
 }
-let mallocLoggerPointer = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "malloc_logger")!.assumingMemoryBound(to: MallocLogger?.self)
+let mallocLoggerPointer = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "malloc_logger").map { $0.assumingMemoryBound(to: MallocLogger?.self) }
 
 func usage() -> rusage_info_v6 {
     var info = rusage_info_v6()
@@ -71,11 +77,11 @@ func measure(_ body: () async -> Void) async -> Sample {
     let startUsage = usage()
     let startCount = allocationCount.load(ordering: .relaxed)
     let startBytes = allocationBytes.load(ordering: .relaxed)
-    if countAllocations { mallocLoggerPointer.pointee = mallocLogger }
+    if countAllocations { mallocLoggerPointer?.pointee = mallocLogger }
     let start = ContinuousClock.now
     await body()
     let wall = ContinuousClock.now - start
-    mallocLoggerPointer.pointee = nil
+    mallocLoggerPointer?.pointee = nil
     let endUsage = usage()
     return Sample(wall: wall, instructions: endUsage.ri_instructions - startUsage.ri_instructions, cycles: endUsage.ri_cycles - startUsage.ri_cycles, allocations: allocationCount.load(ordering: .relaxed) - startCount, bytes: allocationBytes.load(ordering: .relaxed) - startBytes)
 }
@@ -94,20 +100,39 @@ var plan = false
 var planDumpPath: String? = nil
 var planDescription = ""
 var arguments = CommandLine.arguments.dropFirst().makeIterator()
+
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("SWBResolutionBench: \(message)\n".utf8))
+    exit(1)
+}
+
+func value(for option: String) -> String {
+    guard let value = arguments.next() else { fail("\(option) requires a value") }
+    return value
+}
+
+func positiveInteger(for option: String) -> Int {
+    guard let integer = Int(value(for: option)), integer > 0 else { fail("\(option) requires a positive integer") }
+    return integer
+}
+
 while let argument = arguments.next() {
     switch argument {
-    case "--scenario": scenario = arguments.next()!
-    case "--targets": targetCount = Int(arguments.next()!)!
-    case "--iterations": iterations = Int(arguments.next()!)!
-    case "--mode": mode = arguments.next()!
+    case "--scenario": scenario = value(for: argument)
+    case "--targets": targetCount = positiveInteger(for: argument)
+    case "--iterations": iterations = positiveInteger(for: argument)
+    case "--mode": mode = value(for: argument)
     case "--linkage": linkage = true
-    case "--dump": dumpPath = arguments.next()!
+    case "--dump": dumpPath = value(for: argument)
     case "--quiet": quiet = true
     case "--allocs": countAllocations = true
     case "--plan": plan = true
-    case "--plan-dump": plan = true; planDumpPath = arguments.next()!
-    default: fatalError("unknown argument \(argument)")
+    case "--plan-dump": plan = true; planDumpPath = value(for: argument)
+    default: fail("unknown argument \(argument)")
     }
+}
+if countAllocations && mallocLoggerPointer == nil {
+    fail("allocations can't be counted, because malloc_logger isn't available")
 }
 
 // MARK: Graph generation
@@ -134,7 +159,8 @@ func target(_ name: String, type: TestStandardTarget.TargetType, buildSettings: 
     return TestStandardTarget(name, type: type, buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: buildSettings)], buildPhases: buildPhases, dependencies: dependencies.map { TestTargetDependency($0) })
 }
 
-/// A layered graph of about `count` targets: an iOS app depending on frameworks, which depend on static libraries in lower layers, and a host tool with its own chain of dependencies used by some of the frameworks.
+/// A layered graph of about `count` targets: an iOS app depending on frameworks, which depend on static libraries in
+/// lower layers, and a host tool with its own chain of dependencies used by some of the frameworks.
 func layeredTargets(count: Int, implicit: Bool, watch: Bool) -> (targets: [any TestTarget], topLevel: [String]) {
     var random = SplitMix64(state: 0x5EED)
     let hostToolDependencyCount = max(10, count / 20)
@@ -188,7 +214,8 @@ func layeredTargets(count: Int, implicit: Bool, watch: Bool) -> (targets: [any T
     return (targets, ["App"])
 }
 
-/// An iOS app whose frameworks depend on the products of a package, whose library targets depend on each other and on other products.
+/// An iOS app whose frameworks depend on the products of a package, whose library targets depend on each other
+/// and on other products.
 func packageTargets(count: Int) -> (appTargets: [any TestTarget], packageTargets: [any TestTarget], topLevel: [String]) {
     var random = SplitMix64(state: 0xC0FFEE)
     let frameworkCount = max(4, count / 10)
@@ -237,15 +264,21 @@ default: fatalError("unknown scenario \(scenario)")
 
 let core = try await Core.createInitializedTestingCore(pluginLoadingFilter: { _ in true }, registerExtraPlugins: { _ in })
 let setupStart = ContinuousClock.now
-let workspace = try TestWorkspace("Workspace", sourceRoot: Path("/tmp/SWBResolutionBench"), projects: [
-    TestProject(
-        "aProject",
-        groupTree: TestGroup("Sources", children: [TestFile("file.swift")]),
-        buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: ["PRODUCT_NAME": "$(TARGET_NAME)", "MACOSX_DEPLOYMENT_TARGET": "26.0"])],
-        targets: generated.targets)
-] + (packageProjectTargets.isEmpty ? [] : [
-    TestPackageProject("Package", groupTree: TestGroup("PackageSources", children: [TestFile("file.swift", guid: "package-file")]), buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: ["PRODUCT_NAME": "$(TARGET_NAME)", "MACOSX_DEPLOYMENT_TARGET": "26.0"])], targets: packageProjectTargets)
-])).load(core)
+let workspace = try TestWorkspace(
+    "Workspace", sourceRoot: Path("/tmp/SWBResolutionBench"),
+    projects: [
+        TestProject(
+            "aProject",
+            groupTree: TestGroup("Sources", children: [TestFile("file.swift")]),
+            buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: ["PRODUCT_NAME": "$(TARGET_NAME)", "MACOSX_DEPLOYMENT_TARGET": "26.0"])],
+            targets: generated.targets)
+    ]
+        + (packageProjectTargets.isEmpty
+            ? []
+            : [
+                TestPackageProject("Package", groupTree: TestGroup("PackageSources", children: [TestFile("file.swift", guid: "package-file")]), buildConfigurations: [TestBuildConfiguration("Debug", buildSettings: ["PRODUCT_NAME": "$(TARGET_NAME)", "MACOSX_DEPLOYMENT_TARGET": "26.0"])], targets: packageProjectTargets)
+            ])
+).load(core)
 let setupTime = ContinuousClock.now - setupStart
 
 let buildRequest: BuildRequest
@@ -374,12 +407,14 @@ func median<T: Comparable>(_ values: [T]) -> T { values.sorted()[values.count / 
 let finalUsage = usage()
 let ms = { (d: Duration) in Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15 }
 let walls = samples.map { ms($0.wall) }
-print(String(format: "%@ %@ targets=%d resolved=%d edges=%d  wall min %.1f ms med %.1f ms  instr med %.1f M  cycles med %.1f M  allocs med %d  bytes med %.1f MB  peak footprint %.1f MB (before %.1f MB)  setup %.1f s",
-             scenario, mode + (linkage ? "+linkage" : ""), targetCount, targetsResolved, edgesResolved,
-             walls.min()!, median(walls),
-             Double(median(samples.map(\.instructions))) / 1e6, Double(median(samples.map(\.cycles))) / 1e6,
-             median(samples.map(\.allocations)), Double(median(samples.map(\.bytes))) / 1e6,
-             Double(finalUsage.ri_lifetime_max_phys_footprint) / 1e6, Double(footprintBefore) / 1e6, Double(setupTime.components.seconds)))
+print(
+    String(
+        format: "%@ %@ targets=%d resolved=%d edges=%d  wall min %.1f ms med %.1f ms  instr med %.1f M  cycles med %.1f M  allocs med %d  bytes med %.1f MB  peak footprint %.1f MB (before %.1f MB)  setup %.1f s",
+        scenario, mode + (linkage ? "+linkage" : ""), targetCount, targetsResolved, edgesResolved,
+        walls.min() ?? 0, median(walls),
+        Double(median(samples.map(\.instructions))) / 1e6, Double(median(samples.map(\.cycles))) / 1e6,
+        median(samples.map(\.allocations)), Double(median(samples.map(\.bytes))) / 1e6,
+        Double(finalUsage.ri_lifetime_max_phys_footprint) / 1e6, Double(footprintBefore) / 1e6, Double(setupTime.components.seconds)))
 if plan {
     let planMs = planSamples.suffix(samples.count).map(ms)
     print(String(format: "  planning: tasks=%d  min %.1f ms  med %.1f ms (included in wall above)", tasksPlanned, planMs.min() ?? 0, planMs.isEmpty ? 0 : median(planMs)))

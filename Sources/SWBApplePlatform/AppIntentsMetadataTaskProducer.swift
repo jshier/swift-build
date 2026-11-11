@@ -70,14 +70,16 @@ final class AppIntentsMetadataTaskProducer: PhasedTaskProducer, TaskProducer {
             var staticLibraryDependencyList: Set<Path> = []
             if let configuredTarget = self.targetContext.configuredTarget {
                 let globalProductPlan = self.targetContext.globalProductPlan
-                // Each target computes the metadata paths of each of its transitive dependencies, so memoize them for the plan. Whether a dependency is a bundle depends on the spec domain of this target.
+                // Every target computes the metadata paths of all its transitive dependencies, so memoize them for the
+                // plan. The key includes this target's spec domain, which determines whether a dependency is a bundle.
                 let memoizationKey = "AppIntentsMetadataPaths:\(self.context.domain)"
                 globalProductPlan.forEachTransitiveDependency(of: configuredTarget) { dependency in
                     let paths = globalProductPlan.memoizedValue(for: dependency, key: memoizationKey) { () -> (bundleMetadataPath: Path?, staticLibraryMetadataPath: Path?) in
                         var bundleMetadataPath: Path? = nil
                         if let standardTarget = dependency.target as? StandardTarget,
-                           let bundleProductType = self.context.getSpec(standardTarget.productTypeIdentifier),
-                           bundleProductType.conformsTo(identifier: "com.apple.product-type.bundle") {
+                            let bundleProductType = self.context.getSpec(standardTarget.productTypeIdentifier),
+                            bundleProductType.conformsTo(identifier: "com.apple.product-type.bundle")
+                        {
                             let targetScope = globalProductPlan.getTargetSettings(dependency).globalScope
                             bundleMetadataPath = targetScope.evaluate(BuiltinMacros.TARGET_BUILD_DIR)
                                 .join(targetScope.evaluate(BuiltinMacros.UNLOCALIZED_RESOURCES_FOLDER_PATH))
@@ -86,7 +88,7 @@ final class AppIntentsMetadataTaskProducer: PhasedTaskProducer, TaskProducer {
                         var staticLibraryMetadataPath: Path? = nil
                         let targetScope = globalProductPlan.getTargetSettings(dependency).globalScope
                         let machOType = targetScope.evaluate(BuiltinMacros.MACH_O_TYPE)
-                        if  machOType == "staticlib" || machOType == "mh_object" {
+                        if machOType == "staticlib" || machOType == "mh_object" {
                             staticLibraryMetadataPath = targetScope.evaluate(BuiltinMacros.TARGET_BUILD_DIR)
                                 .join(targetScope.evaluate(BuiltinMacros.PRODUCT_MODULE_NAME) + ".appintents")
                                 .join("Metadata.appintents/extract.actionsdata")

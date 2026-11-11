@@ -810,7 +810,7 @@ public final class Settings: PlatformBuildContext, TripleLookup, Sendable {
         return scope.evaluate(BuiltinMacros.ALLOW_BUILD_REQUEST_OVERRIDES)
     }
 
-    /// The platform, SDK, SDK variant, and toolchains of the settings for a project and optionally a target, which are computed before, and without, the rest of the settings.
+    /// The platform, SDK, SDK variant, and toolchains of settings, which are bound before the rest is constructed.
     package struct BoundPlatformProperties: Sendable {
         package let platform: Platform?
         package let sdk: SDK?
@@ -818,7 +818,9 @@ public final class Settings: PlatformBuildContext, TripleLookup, Sendable {
         package let toolchains: [Toolchain]
     }
 
-    /// The bound properties of settings, which depend only on the parameters, project, target, and purpose, along with the diagnostics of computing them, so that settings which differ in other inputs, such as provisioning inputs or imparted build properties, can share them.
+    /// The bound properties of settings and the diagnostics from computing them. They depend only on the parameters,
+    /// project, target, and purpose, so settings that differ in other inputs, such as provisioning inputs or imparted
+    /// build properties, can share them.
     struct CachedBoundProperties: @unchecked Sendable {
         let boundProperties: SettingsBuilder.BoundProperties
         let errors: [String]
@@ -833,11 +835,12 @@ public final class Settings: PlatformBuildContext, TripleLookup, Sendable {
         }
     }
 
-    /// Computes the bound properties of the settings for the given parameters and settings context, as `SettingsBuilder.construct()` does, without computing the settings.
+    /// Computes the bound properties of the settings for the given parameters and settings context, as
+    /// `SettingsBuilder.construct()` does, without constructing the settings.
     static func computeBoundProperties(workspaceContext: WorkspaceContext, buildRequestContext: BuildRequestContext, parameters: BuildParameters, settingsContext: SettingsContext, sdkRegistry: (any SDKRegistryLookup)?) -> CachedBoundProperties {
         let builder = SettingsBuilder(workspaceContext, buildRequestContext, parameters, settingsContext, forBindingProperties: true, sdkRegistry)
         let project = settingsContext.project
-        let effectiveProjectConfig = project.map { project in project.getEffectiveConfiguration(parameters.configuration, packageConfigurationOverride: parameters.packageConfigurationOverride)! }
+        let effectiveProjectConfig = project?.getEffectiveConfiguration(parameters.configuration, packageConfigurationOverride: parameters.packageConfigurationOverride)
         let targetConfiguration = project.map { project in settingsContext.target?.getEffectiveConfiguration(parameters.configuration, defaultConfigurationName: project.isPackage ? (parameters.packageConfigurationOverride ?? project.defaultConfigurationName) : project.defaultConfigurationName) } ?? nil
         let boundProperties = MacroNamespace.withExpressionInterningEnabled { builder.computeBoundProperties(effectiveProjectConfig, targetConfiguration) }
         return CachedBoundProperties(boundProperties: boundProperties, errors: builder.errors.elements, warnings: builder.warnings.elements, notes: builder.notes.elements, diagnostics: builder.diagnostics.elements, inputPathsAffectingSettings: builder.inputPathsAffectingSettings.elements, inputPathsAffectingSettingsSignature: builder.inputPathsAffectingSettingsSignature)
@@ -1537,9 +1540,13 @@ final class SettingsBuilder: ProjectMatchLookup, TripleLookup {
         //
         // Even though the initialization that will be done by this builder is very similar to the initialization we do, we cannot simply do the initialization, bind the properties, and then continue, because some of the settings which are derived from the bound objects are injected at varying points in the process (this dates from Xcode's injecting these settings into different tiers).
         //
-        // FIXME: This is unfortunate, as it makes settings construction about twice as expensive as it otherwise could be. We should eventually try to devise a roadmap in which the binding can happen much more simply, so we don't need to do this.
+        // FIXME: This is unfortunate, as the binding builder repeats most of the table construction, which makes it
+        // about 40% of the cost of constructing settings. Caching the bound properties only helps settings that share
+        // them, so every distinct set of parameters still pays for both. We should eventually try to devise a roadmap
+        // in which the binding can happen much more simply, so we don't need to do this.
         //
-        // The bound properties don't depend on the provisioning inputs, imparted build properties, artifact bundles, or compilation caching, so they're cached for the settings which differ only in those, unless a custom SDK registry is used.
+        // The bound properties don't depend on provisioning inputs, imparted build properties, artifact bundles, or
+        // compilation caching, so settings that differ only in those share them, unless they use a custom SDK registry.
         let cachedBoundProperties: Settings.CachedBoundProperties
         if usesDefaultSDKRegistry, let project {
             cachedBoundProperties = workspaceContext.workspaceSettingsCache.getCachedBoundProperties(parameters, project: project, target: target, purpose: settingsContext.purpose, buildRequestContext: buildRequestContext, filesSignature: { [buildRequestContext] in buildRequestContext.filesSignature(for: $0) })

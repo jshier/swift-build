@@ -255,7 +255,7 @@ final class HeadermapTaskProducer: PhasedTaskProducer, TaskProducer {
         var seenInstalledFrameworkMappings = Set<Path>()
         var nonFrameworkMappings = OrderedDictionary<Path, Path>()
 
-        // Each target sorts the targets of its project the same way, so do it once for the plan.
+        // Every target in the project sorts its targets the same way, so sort them once for the plan.
         let sortedTargetHeaderInfo = context.globalProductPlan.memoizedValue(key: "TargetHeaderInfoSortedByNameAndGUID:\(project.guid)") {
             projectInfo.targetHeaderInfo.sorted(byKey: { ($0.name + $0.guid) < ($1.name + $1.guid) })
         }

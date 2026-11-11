@@ -59,7 +59,8 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
         return firstConfiguredTargetByTarget
     }
 
-    /// The configured targets of the plan and their dependencies as indices, for walking the transitive dependencies of targets without looking up the dependencies of each target repeatedly. This is computed when first used, after the plan has been initialized.
+    /// The plan's configured targets and their dependencies as indices, so walking transitive dependencies doesn't look
+    /// up each target's dependencies repeatedly. It's computed on first use, after the plan is initialized.
     private struct DependencyIndexGraph: Sendable {
         let indexByTarget: [ConfiguredTarget: Int]
         let targets: [ConfiguredTarget]
@@ -80,7 +81,8 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
         for target in plan.planRequest.buildGraph.allTargets {
             _ = index(of: target)
         }
-        // The dependencies may include targets which aren't in the build graph, such as targets building dynamically to resolve diamond linkage.
+        // The dependencies may include targets which aren't in the build graph, such as targets building dynamically to
+        // resolve diamond linkage.
         var dependencies = [[Int]]()
         while dependencies.count < targets.count {
             dependencies.append(plan.dependencies(of: targets[dependencies.count]).map { index(of: $0) })
@@ -88,7 +90,8 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
         return DependencyIndexGraph(indexByTarget: indexByTarget, targets: targets, dependencies: dependencies)
     }
 
-    /// Calls `body` once with each of the transitive dependencies of `configuredTarget`, in an unspecified order. Like `transitiveClosure`, the target itself is included only if it depends on itself.
+    /// Calls `body` once for each transitive dependency of `configuredTarget`, in an unspecified order. Like
+    /// `transitiveClosure`, this includes the target itself only if it depends on itself.
     package func forEachTransitiveDependency(of configuredTarget: ConfiguredTarget, _ body: (ConfiguredTarget) throws -> Void) rethrows {
         let graph = dependencyIndexGraph.getValue(self)
         guard let start = graph.indexByTarget[configuredTarget] else {
@@ -110,22 +113,27 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
     private struct MemoizedValueKey: Hashable, Sendable {
         let configuredTarget: ConfiguredTarget?
         let key: String
+        /// The value's type, so values of different types never share a key, which makes downcasting stored values safe.
+        let valueType: ObjectIdentifier
     }
 
     private let memoizedValues = ShardedRegistry<MemoizedValueKey, any Sendable>()
 
-    /// Returns a value computed from a configured target, memoized for the plan, for task producers which compute the same value from each of the targets their target depends on, so that it's computed once rather than for each target depending on it.
+    /// Returns a value computed from a configured target, memoized for the plan. This is for task producers that
+    /// compute the same value from each of their target's dependencies, so it's computed once per dependency rather
+    /// than once per dependent.
     ///
-    /// - parameter key: Identifies the value, and must include anything the value depends on other than the configured target.
+    /// - parameter key: Identifies the value, and must include anything the value depends on other than the configured
+    ///   target.
     package func memoizedValue<Value: Sendable>(for configuredTarget: ConfiguredTarget, key: String, _ compute: () -> Value) -> Value {
-        memoizedValues.getOrInsert(MemoizedValueKey(configuredTarget: configuredTarget, key: key)) { compute() } as! Value
+        memoizedValues.getOrInsert(MemoizedValueKey(configuredTarget: configuredTarget, key: key, valueType: ObjectIdentifier(Value.self))) { compute() } as! Value
     }
 
     /// Returns a value memoized for the plan, for task producers which compute the same value for each target.
     ///
     /// - parameter key: Identifies the value, and must include anything the value depends on.
     package func memoizedValue<Value: Sendable>(key: String, _ compute: () -> Value) -> Value {
-        memoizedValues.getOrInsert(MemoizedValueKey(configuredTarget: nil, key: key)) { compute() } as! Value
+        memoizedValues.getOrInsert(MemoizedValueKey(configuredTarget: nil, key: key, valueType: ObjectIdentifier(Value.self))) { compute() } as! Value
     }
 
     /// The targets being built.
