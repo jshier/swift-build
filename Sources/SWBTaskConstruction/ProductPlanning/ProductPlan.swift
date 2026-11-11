@@ -40,7 +40,12 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
     ///
     /// The array of imparted build properties is ordered so that direct dependencies come first, followed by their direct
     /// transitive dependencies and so forth.
-    private var impartedBuildPropertiesByTarget: [ConfiguredTarget: [SWBCore.ImpartedBuildProperties]]
+    private var impartedBuildPropertiesByTarget: [ConfiguredTarget: [SWBCore.ImpartedBuildProperties]] {
+        didSet { settingsByTarget.removeAll() }
+    }
+
+    /// The settings of each configured target, which task producers look up repeatedly, including for other targets. Looking them up in the settings cache compares their parameters, so the lookups are memoized for the plan.
+    private let settingsByTarget = Registry<ConfiguredTarget, Lazy<Settings>>()
 
     /// The set of shared intermediate nodes that have been created, keyed by their sharing identifier.
     ///
@@ -112,7 +117,9 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
     package private(set) var artifactBundlesByTarget: [ConfiguredTarget: [ArtifactBundleInfo]]
 
     /// Maps each package target to the compilation caching settings imposed on it by the targets which depend on it.
-    package private(set) var compilationCachingInfoByTarget: [ConfiguredTarget: CompilationCachingInfo]
+    package private(set) var compilationCachingInfoByTarget: [ConfiguredTarget: CompilationCachingInfo] {
+        didSet { settingsByTarget.removeAll() }
+    }
 
     /// For each consumer target, the names of Clang modules in its transitive deps that should
     /// be treated as IPI — a dep with `SKIP_INSTALL=YES` and a `MODULEMAP_FILE` resolving to a
@@ -1381,8 +1388,10 @@ package final class GlobalProductPlan: GlobalTargetInfoProvider
     /// Get the settings to use for a particular configured target.
     package func getTargetSettings(_ configuredTarget: ConfiguredTarget) -> Settings {
         // FIXME: Reevaluate whether or not we should cache all of the things we compute here in the workspace context, that may lead to more memory use than it is worth.
-        let provisioningTaskInputs: ProvisioningTaskInputs? = planRequest.buildRequest.enableIndexBuildArena ? nil : planRequest.provisioningInputs(for: configuredTarget)
-        return planRequest.buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target, provisioningTaskInputs: provisioningTaskInputs, impartedBuildProperties: impartedBuildPropertiesByTarget[configuredTarget], artifactBundleInfo: artifactBundlesByTarget[configuredTarget], compilationCachingInfo: compilationCachingInfoByTarget[configuredTarget])
+        settingsByTarget.getOrInsert(configuredTarget) {
+            let provisioningTaskInputs: ProvisioningTaskInputs? = planRequest.buildRequest.enableIndexBuildArena ? nil : planRequest.provisioningInputs(for: configuredTarget)
+            return planRequest.buildRequestContext.getCachedSettings(configuredTarget.parameters, target: configuredTarget.target, provisioningTaskInputs: provisioningTaskInputs, impartedBuildProperties: impartedBuildPropertiesByTarget[configuredTarget], artifactBundleInfo: artifactBundlesByTarget[configuredTarget], compilationCachingInfo: compilationCachingInfoByTarget[configuredTarget])
+        }
     }
 
     /// Get the settings to use for an unconfigured target.
