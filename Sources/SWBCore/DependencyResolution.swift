@@ -487,6 +487,12 @@ extension SpecializationParameters {
     /// Configured targets for targets in the workspace context mapped by target.  There may be multiple configured targets for a given target, each one configured with different parameters.
     var configuredTargetsByTarget = [Target: Set<ConfiguredTarget>]()
 
+    /// The configured targets created by `lookupConfiguredTarget`, in the order they were created.
+    private(set) var createdConfiguredTargets = [ConfiguredTarget]()
+
+    /// How many of the configured targets created by the linkage dependency resolver have been merged into this resolver.
+    var mergedLinkageConfiguredTargetCount = 0
+
     func updateConfiguredTargetsByTarget(_ update: (_ configuredTargetsByTarget: inout [Target: Set<ConfiguredTarget>]) -> Void) {
         update(&configuredTargetsByTarget)
     }
@@ -785,6 +791,7 @@ extension SpecializationParameters {
             // At this point we know there is not a configured target for this target and parameters in our cache, so create one and return it.
             let configuredTarget = ConfiguredTarget(parameters: parameters, target: target, specializeGuidForActiveRunDestination: buildRequest.buildsIndexWorkspaceDescription)
             configuredTargetsByTarget[configuredTarget.target, default: []].insert(configuredTarget)
+            createdConfiguredTargets.append(configuredTarget)
             addSuperimposedProperties(for: configuredTarget, superimposedProperties: superimposedProperties)
             return configuredTarget
         }

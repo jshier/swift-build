@@ -834,9 +834,16 @@ fileprivate extension TargetDependencyResolver {
                 // be included as well, otherwise, they will not be properly considered for things like the specialization
                 // filtering that happens for default vs. suffixed SDK differences between a target. (see rdar://75600023).
 
-                for (key, configuredTargets) in await linkageDependencyResolver.resolver.configuredTargetsByTarget {
-                    resolver.updateConfiguredTargetsByTarget { $0[key, default: []].formUnion(configuredTargets) }
-                    for ct in configuredTargets {
+                // The linkage resolver only adds configured targets, so merge those created since the last merge.
+                let linkageConfiguredTargets = await linkageDependencyResolver.resolver.createdConfiguredTargets
+                for ct in linkageConfiguredTargets[resolver.mergedLinkageConfiguredTargetCount...] {
+                    resolver.configuredTargetsByTarget[ct.target, default: []].insert(ct)
+                }
+                resolver.mergedLinkageConfiguredTargetCount = linkageConfiguredTargets.count
+
+                // Only superimposed properties which merge libraries impose anything.
+                if imposedParameters?.superimposedProperties?.mergeableLibrary == true {
+                    for ct in linkageConfiguredTargets {
                         let effectiveImposedParameters = imposedParameters?.effectiveParameters(target: configuredTarget, dependency: ct, dependencyResolver: resolver)
                         resolver.addSuperimposedProperties(for: ct, superimposedProperties: effectiveImposedParameters?.superimposedProperties)
                     }
