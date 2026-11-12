@@ -417,32 +417,6 @@ let package = Package(
             dependencies: ["SWBBuildService", "SWBBuildSystem", "SwiftBuildTestSupport", "SWBTestSupport"],
             swiftSettings: swiftSettings(languageMode: .v6)),
 
-        // Perf tests
-        .testTarget(
-            name: "SWBBuildSystemPerfTests",
-            dependencies: ["SWBBuildSystem", "SWBTestSupport", "SwiftBuildTestSupport"],
-            swiftSettings: swiftSettings(languageMode: .v6)),
-        .testTarget(
-            name: "SWBCASPerfTests",
-            dependencies: ["SWBCAS", "SWBTestSupport"],
-            swiftSettings: swiftSettings(languageMode: .v6)),
-        .testTarget(
-            name: "SWBCorePerfTests",
-            dependencies: ["SWBCore", "SWBTestSupport"],
-            swiftSettings: swiftSettings(languageMode: .v6)),
-        .testTarget(
-            name: "SWBTaskConstructionPerfTests",
-            dependencies: ["SWBTaskConstruction", "SWBTestSupport"],
-            swiftSettings: swiftSettings(languageMode: .v6)),
-        .testTarget(
-            name: "SWBUtilPerfTests",
-            dependencies: ["SWBUtil", "SWBTestSupport"],
-            swiftSettings: swiftSettings(languageMode: .v6)),
-        .testTarget(
-            name: "SwiftBuildPerfTests",
-            dependencies: ["SwiftBuild", "SWBTestSupport", "SwiftBuildTestSupport"],
-            swiftSettings: swiftSettings(languageMode: .v6)),
-
         // Commands
         .plugin(
             name: "launch-xcode",
@@ -498,6 +472,37 @@ if isStaticBuild {
     package.targets = package.targets.filter { target in
         target.type != .test && !target.name.hasSuffix("TestSupport")
     }
+}
+
+// The benchmarks in `Benchmarks/`, run with `swift package benchmark`. They link the testing support library, so on macOS they find the Testing framework in the Xcode selected by `DEVELOPER_DIR`.
+if !isStaticBuild {
+    let platformDeveloperPath = (Context.environment["DEVELOPER_DIR"] ?? "/Applications/Xcode.app/Contents/Developer") + "/Platforms/MacOSX.platform/Developer"
+    let testingRPaths: [LinkerSetting] = [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "\(platformDeveloperPath)/Library/Frameworks", "-Xlinker", "-rpath", "-Xlinker", "\(platformDeveloperPath)/usr/lib"], .when(platforms: [.macOS]))]
+    func benchmark(_ name: String, dependencies: [Target.Dependency]) -> Target {
+        .executableTarget(
+            name: name,
+            dependencies: ["SWBBenchmarkSupport", .product(name: "Benchmark", package: "benchmark")] + dependencies,
+            path: "Benchmarks/\(name)",
+            swiftSettings: swiftSettings(languageMode: .v6),
+            linkerSettings: testingRPaths,
+            plugins: [.plugin(name: "BenchmarkPlugin", package: "benchmark")])
+    }
+    package.dependencies.append(.package(url: "https://github.com/ordo-one/benchmark.git", .upToNextMajor(from: "1.38.1")))
+    package.targets += [
+        .target(
+            name: "SWBBenchmarkSupport",
+            dependencies: [.product(name: "Benchmark", package: "benchmark"), "SWBCore", "SWBProtocol", "SWBTaskConstruction", "SWBTaskExecution", "SWBTestSupport", "SWBUtil"],
+            path: "Benchmarks/SWBBenchmarkSupport",
+            swiftSettings: swiftSettings(languageMode: .v6)),
+        benchmark("PlanningBenchmarks", dependencies: ["SWBCore", "SWBProtocol", "SWBTaskConstruction", "SWBTaskExecution", "SWBTestSupport", "SWBUtil"]),
+        benchmark("SWBUtilBenchmarks", dependencies: ["SWBUtil"]),
+        benchmark("SWBCASBenchmarks", dependencies: ["SWBCAS", "SWBUtil"]),
+        benchmark("SWBCoreBenchmarks", dependencies: ["SWBCore", "SWBMacro", "SWBProtocol", "SWBTaskExecution", "SWBTestSupport", "SWBUtil"]),
+        benchmark("SWBTaskConstructionBenchmarks", dependencies: ["SWBCore", "SWBTaskConstruction", "SWBTestSupport", "SWBUtil"]),
+        benchmark("SWBBuildSystemBenchmarks", dependencies: ["SWBBuildSystem", "SWBCore", "SWBProtocol", "SWBTestSupport", "SWBUtil", "SwiftBuildTestSupport"]),
+        // The build service runs out of process, from next to the benchmark.
+        benchmark("SwiftBuildBenchmarks", dependencies: ["SwiftBuild", "SWBBuildServiceBundle", "SWBCore", "SWBProtocol", "SWBTestSupport", "SWBUtil", "SwiftBuildTestSupport"]),
+    ]
 }
 
 // `SWIFTCI_USE_LOCAL_DEPS` configures if dependencies are locally available to build
