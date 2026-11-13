@@ -1776,6 +1776,12 @@ public struct DiscoveredLibtoolLinkerToolSpecInfo: DiscoveredCommandLineToolSpec
 public final class LibtoolLinkerSpec : GenericLinkerSpec, SpecIdentifierType, @unchecked Sendable {
     public static let identifier = "com.apple.pbx.linkers.libtool"
 
+    private static let appleVersionRegexes = [RegEx(patternLiteral: #"^Apple Inc\. version .*-(?<version>[0-9\.]+)\z"#)]
+    private static let otherVersionRegexes = [
+        RegEx(patternLiteral: #"^libtool \(GNU libtool\) (?<version>[0-9\.]+).*"#),
+        RegEx(patternLiteral: #"^LLD (?<version>[0-9\.]+).*"#),
+    ]
+
     override public var payloadType: (any TaskPayload.Type)? { return LibtoolLinkerTaskPayload.self }
 
     public func libtoolToolPath(_ producer: any CommandProducer, _ scope: MacroEvaluationScope) -> Path {
@@ -1800,20 +1806,12 @@ public final class LibtoolLinkerSpec : GenericLinkerSpec, SpecIdentifierType, @u
         let commandLine = [toolPath.str, producer.isApplePlatform ? "-V" : "--version"]
         return try await producer.discoveredCommandLineToolSpecInfo(delegate, nil, commandLine, { executionResult in
             let outputString = String(decoding: executionResult.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            let regexes: [Regex<(Substring, libtool: Substring)>]
-            if producer.isApplePlatform {
-                regexes = [#/^Apple Inc\. version .*-(?<libtool>[0-9\.]+)$/#]
-            } else {
-                regexes = [
-                    #/^libtool \(GNU libtool\) (?<libtool>[0-9\.]+).*/#,
-                    #/^LLD (?<libtool>[0-9\.]+).*/#,
-                ]
-            }
-            guard let match = try regexes.compactMap({ try $0.firstMatch(in: outputString) }).first else {
+            let regexes = producer.isApplePlatform ? Self.appleVersionRegexes : Self.otherVersionRegexes
+            guard let version = regexes.firstVersion(in: outputString) else {
                 throw StubError.error("Could not parse libtool version from string '\(outputString)', command line '\(commandLine.joined(separator: " "))'")
             }
 
-            return try DiscoveredLibtoolLinkerToolSpecInfo(toolPath: toolPath, toolVersion: Version(String(match.output.libtool)))
+            return try DiscoveredLibtoolLinkerToolSpecInfo(toolPath: toolPath, toolVersion: Version(version))
         })
     }
 
@@ -2006,6 +2004,30 @@ public final class LibtoolLinkerSpec : GenericLinkerSpec, SpecIdentifierType, @u
     }
 }
 
+extension DiscoveredLdLinkerToolSpecInfo {
+    fileprivate static let gnuLDVersionRegexes = [
+        // The trailing distro release suffix (e.g. "-28.fc43") is optional: pre-release
+        // snapshot builds, such as Fedora Rawhide's binutils, print a bare dotted version
+        // with no suffix (e.g. "GNU ld version 2.47.50.20260921").
+        RegEx(patternLiteral: #"GNU ld version (?<version>[\d.]+)(?:-.*)?"#),
+        RegEx(patternLiteral: #"GNU ld \(GNU Binutils.*\) (?<version>[\d.]+)"#),
+    ]
+    fileprivate static let goldVersionRegexes = [
+        RegEx(patternLiteral: #"GNU gold version (?<version>[\d.]+)-.*"#),
+        RegEx(patternLiteral: #"GNU gold \(GNU Binutils.*\) (?<version>[\d.]+)"#),  // Ubuntu "GNU gold (GNU Binutils for Ubuntu 2.38) 1.16", Debian "GNU gold (GNU Binutils for Debian 2.40) 1.16"
+        RegEx(patternLiteral: #"GNU gold \(version .*\) (?<version>[\d.]+)"#),  // Fedora "GNU gold (version 2.40-14.fc39) 1.16", RHEL "GNU gold (version 2.35.2-54.el9) 1.16", Amazon "GNU gold (version 2.29.1-31.amzn2.0.1) 1.14"
+    ]
+    fileprivate static let linkExeVersionRegexes = [RegEx(patternLiteral: #"Microsoft \(R\) Incremental Linker Version (?<version>[\d.]+)"#)]
+    fileprivate static let lldVersionRegexes = [RegEx(patternLiteral: #"LLD (?<version>[\d.]+).*"#)]
+}
+
+extension [RegEx] {
+    /// The `version` group of the first of these regular expressions that matches `output`.
+    fileprivate func firstVersion(in output: String) -> String? {
+        return lazy.compactMap({ $0.firstMatch(in: output)?["version"] }).first
+    }
+}
+
 /// Consults the global cache of discovered info for the linker at `toolPath` and returns it, creating it if necessary.
 ///
 /// This is global and public because it is used by `SWBTaskExecution` and `CoreBasedTests`, which is the basis of many of our tests (so caching this info across tests is desirable).
@@ -2032,50 +2054,28 @@ public func discoveredLinkerToolsInfo(_ producer: any CommandProducer, _ delegat
         } catch let e as CommandLineOutputJSONParsingError {
             let vCommandLine = [toolPath.str, "-v"]
             return try await producer.discoveredCommandLineToolSpecInfo(delegate, nil, vCommandLine, { executionResult in
-                let gnuLD = [
-                    // The trailing distro release suffix (e.g. "-28.fc43") is optional: pre-release
-                    // snapshot builds, such as Fedora Rawhide's binutils, print a bare dotted version
-                    // with no suffix (e.g. "GNU ld version 2.47.50.20260921"). Use a non-capturing
-                    // group so this regex's output type still unifies with its sibling in the array.
-                    #/GNU ld version (?<version>[\d.]+)(?:-.*)?/#,
-                    #/GNU ld \(GNU Binutils.*\) (?<version>[\d.]+)/#,
-                ]
-                if let match = try gnuLD.compactMap({ try $0.firstMatch(in: String(decoding: executionResult.stdout, as: UTF8.self)) }).first {
-                    return DiscoveredLdLinkerToolSpecInfo(linker: .gnuld, toolPath: toolPath, toolVersion: try Version(String(match.output.version)), architectures: Set())
+                let output = String(decoding: executionResult.stdout, as: UTF8.self)
+                if let version = DiscoveredLdLinkerToolSpecInfo.gnuLDVersionRegexes.firstVersion(in: output) {
+                    return DiscoveredLdLinkerToolSpecInfo(linker: .gnuld, toolPath: toolPath, toolVersion: try Version(version), architectures: Set())
                 }
 
-                let goLD = [
-                    #/GNU gold version (?<version>[\d.]+)-.*/#,
-                    #/GNU gold \(GNU Binutils.*\) (?<version>[\d.]+)/#,  // Ubuntu "GNU gold (GNU Binutils for Ubuntu 2.38) 1.16", Debian "GNU gold (GNU Binutils for Debian 2.40) 1.16"
-                    #/GNU gold \(version .*\) (?<version>[\d.]+)/#,  // Fedora "GNU gold (version 2.40-14.fc39) 1.16", RHEL "GNU gold (version 2.35.2-54.el9) 1.16", Amazon "GNU gold (version 2.29.1-31.amzn2.0.1) 1.14"
-                ]
-
-                if let match = try goLD.compactMap({ try $0.firstMatch(in: String(decoding: executionResult.stdout, as: UTF8.self)) }).first {
-                    return DiscoveredLdLinkerToolSpecInfo(linker: .gold, toolPath: toolPath, toolVersion: try Version(String(match.output.version)), architectures: Set())
+                if let version = DiscoveredLdLinkerToolSpecInfo.goldVersionRegexes.firstVersion(in: output) {
+                    return DiscoveredLdLinkerToolSpecInfo(linker: .gold, toolPath: toolPath, toolVersion: try Version(version), architectures: Set())
                 }
 
                 // link.exe has no option to simply dump the version, running, the program will no arguments or an invalid one will dump a header that contains the version.
-                let linkExe = [
-                    #/Microsoft \(R\) Incremental Linker Version (?<version>[\d.]+)/#
-                ]
-                if let match = try linkExe.compactMap({ try $0.firstMatch(in: String(decoding: executionResult.stdout, as: UTF8.self)) }).first {
-                    return DiscoveredLdLinkerToolSpecInfo(linker: .linkExe, toolPath: toolPath, toolVersion: try Version(String(match.output.version)), architectures: Set())
+                if let version = DiscoveredLdLinkerToolSpecInfo.linkExeVersionRegexes.firstVersion(in: output) {
+                    return DiscoveredLdLinkerToolSpecInfo(linker: .linkExe, toolPath: toolPath, toolVersion: try Version(version), architectures: Set())
                 }
 
-                let lld = [
-                    #/LLD (?<version>[\d.]+).*/#,
-                ]
-                if let match = try lld.compactMap({ try $0.firstMatch(in: String(decoding: executionResult.stdout, as: UTF8.self)) }).first {
-                    return DiscoveredLdLinkerToolSpecInfo(linker: .lld, toolPath: toolPath, toolVersion: try Version(String(match.output.version)), architectures: Set())
+                if let version = DiscoveredLdLinkerToolSpecInfo.lldVersionRegexes.firstVersion(in: output) {
+                    return DiscoveredLdLinkerToolSpecInfo(linker: .lld, toolPath: toolPath, toolVersion: try Version(version), architectures: Set())
                 }
 
                 let versionCommandLine = [toolPath.str, "--version"]
                 return try await producer.discoveredCommandLineToolSpecInfo(delegate, nil, versionCommandLine, { executionResult in
-                    let lld = [
-                        #/LLD (?<version>[\d.]+).*/#,
-                    ]
-                    if let match = try lld.compactMap({ try $0.firstMatch(in: String(decoding: executionResult.stdout, as: UTF8.self)) }).first {
-                        return DiscoveredLdLinkerToolSpecInfo(linker: .lld, toolPath: toolPath, toolVersion: try Version(String(match.output.version)), architectures: Set())
+                    if let version = DiscoveredLdLinkerToolSpecInfo.lldVersionRegexes.firstVersion(in: String(decoding: executionResult.stdout, as: UTF8.self)) {
+                        return DiscoveredLdLinkerToolSpecInfo(linker: .lld, toolPath: toolPath, toolVersion: try Version(version), architectures: Set())
                     }
 
                     throw e
@@ -2206,3 +2206,4 @@ fileprivate func filterLinkerFlagsWhenUnderPreviewsDylib(_ flags: [String]) -> [
     }
     return newFlags
 }
+

@@ -22,26 +22,29 @@ public final class StringCatalogCompilerOutputParser : GenericOutputParser {
     /// The parsed file location from the message.
     private var parsedLocation: Diagnostic.FileLocation?
 
+    private static let messageRegex = RegEx(patternLiteral: #"\A(?<message>.*?) \((?<language>[^:'" ]+): (?<key>.*)\)\z"#)
+    private static let locationRegex = RegEx(patternLiteral: #"\A(?<filename>.+): \z"#)
+
     public override func parseMessage(_ string: String) -> String {
         // Regex for parsing the message portion, which contains language and key info at the end in parenthesis. Capture groups are message, language, and key.
         // Using reluctant quantifier on initial message just in case the key itself contains some similar-looking pattern.
         // The location is really part of the message.
-        guard let match = try? #/^(?<message>.*?) \((?<language>[^:'" ]+): (?<key>.*)\)$/#.firstMatch(in: string) else {
+        guard let match: RegEx.MatchResult = Self.messageRegex.firstMatch(in: string), let message = match["message"], let language = match["language"], let key = match["key"] else {
             parsedLocation = nil
             return string
         }
 
         // "languageCode:key"
-        let objectID = "\(match.language):\(match.key)"
+        let objectID = "\(language):\(key)"
 
         parsedLocation = .object(identifier: objectID)
 
-        return String(match.message)
+        return message
     }
 
     public override func parseLocation(_ string: String, in workingDirectory: Path) -> Diagnostic.Location? {
         /// Regex for parsing the "location" at the beginning, which is just the file path. Single capture group is the file path.
-        guard let filename = try? #/^(?<filename>.+): $/#.firstMatch(in: string)?.filename else {
+        guard let filename = Self.locationRegex.firstMatch(in: string)?["filename"] else {
             return nil
         }
 

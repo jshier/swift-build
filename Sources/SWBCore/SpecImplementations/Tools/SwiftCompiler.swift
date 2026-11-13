@@ -3890,6 +3890,11 @@ extension SwiftCompilerSpec {
     }
 }
 
+extension DiscoveredSwiftCompilerToolSpecInfo {
+    fileprivate static let versionRegex = RegEx(patternLiteral: #"Swift version (?<swiftVersion>[\d.]+).*\((?<swiftTag>.*)\)"#)
+    fileprivate static let abiVersionRegex = RegEx(patternLiteral: #"ABI version: (?<abiVersion>[\d.]+)"#)
+}
+
 /// Consults the global cache of discovered info for the Swift compiler at `toolPath` and returns it, creating it if necessary.
 ///
 /// This is global and public because it is used by `SWBTaskExecution` and `CoreBasedTests`, which is the basis of many of our tests (so caching this info across tests is desirable), and which is used in some performance tests.  If we discover that the info for a compiler at a given path can change during an instance of Swift Build (e.g., if a downloadable toolchain can replace an existing compiler) then this may need to be revisited.
@@ -3902,20 +3907,17 @@ public func discoveredSwiftCompilerInfo(_ producer: any CommandProducer, _ deleg
         var swiftTag: String? = nil
         var swiftABIVersion: String? = nil
 
-        let versionRegex = #/Swift version (?<swiftVersion>[\d.]+).*\((?<swiftTag>.*)\)/#
-        let abiVersionRegex = #/ABI version: (?<abiVersion>[\d.]+)/#
-
         // Iterate over each line and add any discovered info to the info object.
         for line in outputString.components(separatedBy: "\n") {
             if swiftVersion == nil {
-                if let groups = try versionRegex.firstMatch(in: line) {
-                    swiftVersion = try? Version(String(groups.output.swiftVersion))
-                    swiftTag = String(groups.output.swiftTag)
+                if let groups: RegEx.MatchResult = DiscoveredSwiftCompilerToolSpecInfo.versionRegex.firstMatch(in: line), let version = groups["swiftVersion"], let tag = groups["swiftTag"] {
+                    swiftVersion = try? Version(version)
+                    swiftTag = tag
                 }
             }
             if swiftABIVersion == nil {
-                if let groups = try abiVersionRegex.firstMatch(in: line) {
-                    swiftABIVersion = groups.output.abiVersion.trimmingCharacters(in: .whitespaces)
+                if let abiVersion = DiscoveredSwiftCompilerToolSpecInfo.abiVersionRegex.firstMatch(in: line)?["abiVersion"] {
+                    swiftABIVersion = abiVersion.trimmingCharacters(in: .whitespaces)
                 }
             }
         }

@@ -110,6 +110,9 @@ public final class Toolchain: Hashable, Sendable {
         self.testingLibraryPlatformNames = testingLibraryPlatformNames
     }
 
+    /// A semantic version, such as the name of a Windows toolchain's directory.
+    private static let directoryVersionRegex = RegEx(patternLiteral: #"\A(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)(-(0|[1-9A-Za-z-][0-9A-Za-z-]*)(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?\z"#)
+
     convenience init(path: Path, operatingSystem: OperatingSystem, aliases additionalAliases: Set<String>, fs: any FSProxy, pluginManager: any PluginManager, platformRegistry: PlatformRegistry?, synthesizeMetadataIfNeeded: Bool) async throws {
         let data: PropertyListItem
 
@@ -127,13 +130,12 @@ public final class Toolchain: Hashable, Sendable {
                 // Windows toolchains do not have any metadata files that define a version (ToolchainInfo.plist is only present in Swift 6.2+ toolchains), so the version needs to be derived from the path.
                 // Use the directory name to scrape the semantic version from.
                 // This branch can be removed once we no longer need to work with toolchains older than Swift 6.2.
-                let pattern = #/^(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)(-(0|[1-9A-Za-z-][0-9A-Za-z-]*)(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/#
-                guard let match = try pattern.wholeMatch(in: path.basename) else {
+                guard let match: RegEx.MatchResult = Self.directoryVersionRegex.firstMatch(in: path.basename), let major = match["major"], let minor = match["minor"], let patch = match["patch"] else {
                     throw StubError.error("Unable to extract version from toolchain directory name in \(path.str)")
                 }
                 // Set the version to only major/minor/patch numerics, as this is used as the directory in other parts of the windows SDK.
                 // i.e. do not include the pre-release '-<version>' match group
-                let version = "\(match.major).\(match.minor).\(match.patch)"
+                let version = "\(major).\(minor).\(patch)"
 
                 data = .plDict([
                     "Identifier": .plString(ToolchainRegistry.defaultToolchainIdentifier),

@@ -208,12 +208,14 @@ public struct ProjectVersionInfo {
     public let project: String
     public let version: Version
 
+    private static let regex = RegEx(patternLiteral: #"\A(?<project>[A-Za-z0-9_]+)-(?<version>[\d\.]+)\z"#)
+
     init(string: String) throws {
-        guard let match = try #/^(?<project>[A-Za-z0-9_]+)-(?<version>[\d\.]+)$/#.wholeMatch(in: string) else {
+        guard let match: RegEx.MatchResult = Self.regex.firstMatch(in: string), let project = match["project"], let version = match["version"] else {
             throw StubError.error("Could not parse project version from string '\(string)'")
         }
-        self.project = String(match.output.project)
-        self.version = try Version(String(match.output.version))
+        self.project = project
+        self.version = try Version(version)
     }
 }
 
@@ -222,13 +224,15 @@ public struct AppleGenericVersionInfo: Sendable {
     let project: String
     public let version: Version
 
+    private static let regex = RegEx(patternLiteral: #"\APROGRAM:(?<program>.+)  PROJECT:(?<project>[A-Za-z0-9_]+)-(?<version>[\d\.]+)\z"#)
+
     init(string: String) throws {
-        guard let match = try #/^PROGRAM:(?<program>.+)  PROJECT:(?<project>[A-Za-z0-9_]+)-(?<version>[\d\.]+)$/#.wholeMatch(in: string) else {
+        guard let match: RegEx.MatchResult = Self.regex.firstMatch(in: string), let program = match["program"], let project = match["project"], let version = match["version"] else {
             throw StubError.error("Could not parse Apple Generic Version from string '\(string)'")
         }
-        self.program = String(match.output.program)
-        self.project = String(match.output.project)
-        self.version = try Version(String(match.output.version))
+        self.program = program
+        self.project = project
+        self.version = try Version(version)
     }
 }
 

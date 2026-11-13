@@ -118,8 +118,10 @@ public struct DiscoveredClangToolSpecInfo: DiscoveredCommandLineToolSpecInfo {
     }
 }
 
-private let clangVersionRe = RegEx(patternLiteral: #""(?<llvm>[0-9]+(?:\.[0-9]+){0,}) \(clang-(?<clang>[0-9]+(?:\.[0-9]+){0,})\)(?: ((\[.+\])|(\(.+\)))+)?""#)
-private let swiftOSSToolchainClangVersionRe = UnsafeSendableRegex(regex: #/"(?<llvm>[0-9]+(?:\.[0-9]+){0,}) \(.* \b([a-f0-9]{40})\b\)(?: ((\[.+\])|(\(.+\)))+)?"/#)
+extension DiscoveredClangToolSpecInfo {
+    fileprivate static let versionRegex = RegEx(patternLiteral: #""(?<llvm>[0-9]+(?:\.[0-9]+){0,}) \(clang-(?<clang>[0-9]+(?:\.[0-9]+){0,})\)(?: ((\[.+\])|(\(.+\)))+)?""#)
+    fileprivate static let swiftOSSToolchainVersionRegex = RegEx(patternLiteral: #""(?<llvm>[0-9]+(?:\.[0-9]+){0,}) \(.* \b([a-f0-9]{40})\b\)(?: ((\[.+\])|(\(.+\)))+)?""#)
+}
 
 /// Creates and returns a discovered info object for the clang compiler for the given path to clang, architecture, SDK, and language.
 public func discoveredClangToolInfo(
@@ -171,11 +173,11 @@ public func discoveredClangToolInfo(
                 // "8.1.0 (clang-802.1.38)"
                 // "12.0.0 (clang-1200.0.22.5) [ptrauth objc isa mode: sign-and-strip]"
                 if macroName == "__clang_version__" {
-                    if let match: RegEx.MatchResult = clangVersionRe.firstMatch(in: macroValue) {
+                    if let match: RegEx.MatchResult = DiscoveredClangToolSpecInfo.versionRegex.firstMatch(in: macroValue) {
                         llvmVersion = match["llvm"].map { try? Version($0) } ?? nil
                         clangVersion = match["clang"].map { try? Version($0) } ?? nil
-                    } else if let match = try? swiftOSSToolchainClangVersionRe.regex.firstMatch(in: macroValue) {
-                        llvmVersion = try? Version(String(match.llvm))
+                    } else if let llvm = DiscoveredClangToolSpecInfo.swiftOSSToolchainVersionRegex.firstMatch(in: macroValue)?["llvm"] {
+                        llvmVersion = try? Version(llvm)
                     }
                 }
 

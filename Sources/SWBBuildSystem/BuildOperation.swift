@@ -2469,8 +2469,10 @@ internal final class OperationSystemAdaptor: SWBLLBuild.BuildSystemDelegate, Act
         }
     }
 
+    private static let triggerNodeRegex = RegEx(patternLiteral: #"\A<TRIGGER:.*>\z"#)
+
     private func isTriggerNode(_ buildKey: BuildKey) -> Bool {
-        guard let node = buildKey as? BuildKey.Node, node.path.wholeMatch(of: #/<TRIGGER:.*>/#) != nil else {
+        guard let node = buildKey as? BuildKey.Node, Self.triggerNodeRegex.firstMatch(in: node.path) != nil else {
             return false
         }
         return true

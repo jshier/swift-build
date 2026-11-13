@@ -42,20 +42,15 @@ public struct ModuleVerifierModuleMap: Hashable {
             self.kind = .privateModule
         }
 
-        let excludedHeaderRegex = #/exclude\s+header\s+"(?<header>(?:[^"\\]|\\.)*)"/#
-        let privateHeaderRegex = #/private(?:\s+textual)?\s+header\s+"(?<header>(?:[^"\\]|\\.)*)"/#
-
-        excludedHeaderNames = moduleContents.matches(of: excludedHeaderRegex).map {
-            String($0.output.header)
-        }
-
-        privateHeaderNames = moduleContents.matches(of: privateHeaderRegex).map {
-            String($0.output.header)
-        }
+        excludedHeaderNames = Self.excludedHeaderRegex.matchGroups(in: moduleContents).map { $0[0] }
+        privateHeaderNames = Self.privateHeaderRegex.matchGroups(in: moduleContents).map { $0[0] }
 
         // Even quicker and dirtier. D:
         modulesHaveContents = moduleContents.contains("umbrella") || moduleContents.contains("header")
     }
+
+    private static let excludedHeaderRegex = RegEx(patternLiteral: #"exclude\s+header\s+"((?:[^"\\]|\\.)*)""#)
+    private static let privateHeaderRegex = RegEx(patternLiteral: #"private(?:\s+textual)?\s+header\s+"((?:[^"\\]|\\.)*)""#)
 
     @_spi(Testing) public var isInPreferredPath: Bool {
         switch self.kind {

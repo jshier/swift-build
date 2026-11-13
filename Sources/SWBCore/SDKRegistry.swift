@@ -40,6 +40,8 @@ public final class SDK: Sendable {
         return suffixes
     }
 
+    private static let canonicalNameRegex = RegEx(patternLiteral: #"\A(?<name>[^0-9]+)(?<version>[0-9]+(?:\.[0-9]+)*)?(?<suffix>.*)\z"#)
+
     /// Returns the component pieces of a given `canonicalName` for an SDK. Returns `nil` if the string is does not match the canonical name format.
     @_spi(Testing) public static func parseSDKName(_ sdkCanonicalName: String, registry: SDKRegistry) throws -> CanonicalNameComponents {
         // Remove the suffix, if there is one.
@@ -60,15 +62,15 @@ public final class SDK: Sendable {
         }
 
         // Split the baseAndVersion into the basename and the version.  Note that there might not be a version.
-        guard let match = try #/(?<name>[^0-9]+)(?<version>[0-9]+(?:\.[0-9]+)*)?(?<suffix>.*)/#.wholeMatch(in: baseAndVersion), match.output.suffix.isEmpty else {
+        guard let match: RegEx.MatchResult = Self.canonicalNameRegex.firstMatch(in: baseAndVersion), let name = match["name"], match["suffix"]?.isEmpty ?? true else {
             throw StubError.error("SDK canonical name '\(sdkCanonicalName)' not in supported format '<name>[<version>][suffix]'.")
         }
 
-        let basename = String(match.output.name)
+        let basename = name
         let version: Version?
-        if let versionString = match.output.version?.nilIfEmpty {
+        if let versionString = match["version"]?.nilIfEmpty {
             do {
-                version = try Version(String(versionString))
+                version = try Version(versionString)
             } catch {
                 throw StubError.error("Version '\(versionString)' of SDK canonical name '\(sdkCanonicalName)' is not in a recognized version format.")
             }

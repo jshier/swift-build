@@ -13,6 +13,9 @@
 public import SWBUtil
 
 public final class ClangModuleVerifierOutputParser: TaskOutputParser {
+    private static let systemPathRegex = RegEx(patternLiteral: "(/usr/include/|/usr/local/include|/usr/lib)")
+    private static let toolchainClangIncludePathRegex = RegEx(patternLiteral: #"/[\w.]+\.xctoolchain/usr/lib/clang/[\d.]+/include/"#)
+
     private let task: any ExecutableTask
     private let payload: (any ClangModuleVerifierPayloadType)?
 
@@ -56,14 +59,14 @@ public final class ClangModuleVerifierOutputParser: TaskOutputParser {
             // Most unrelated warnings are handled by -Wsystem-headers-in-module.
             let message = diag.data.description
             if case .path(let path, _) = diag.location {
-                if path.str.contains(#/(/usr/include/|/usr/local/include|/usr/lib)/#) {
+                if Self.systemPathRegex.firstMatch(in: path.str) != nil {
                     return true
                 }
                 if path.basename == "Test.h" && message.hasPrefix("missing submodule") {
                     return true
                 }
             }
-            if message.contains(#//[\\w.]+\\.xctoolchain/usr/lib/clang/[\\d.]+/include//#) {
+            if Self.toolchainClangIncludePathRegex.firstMatch(in: message) != nil {
                 return true
             }
             if message.contains(".sdk/usr/include/c++/") {

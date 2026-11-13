@@ -208,14 +208,18 @@ final class TAPIMergeToolSpec : CommandLineToolSpec, SpecImplementationType, @un
     }
 }
 
+extension DiscoveredTAPIToolSpecInfo {
+    fileprivate static let versionRegex = RegEx(patternLiteral: #"\AApple TAPI version.+\(tapi[_\w\d]*-(?<tapi>[\d.]+)\).*\z"#)
+}
+
 public func discoveredTAPIToolInfo(_ producer: any CommandProducer, _ delegate: any CoreClientTargetDiagnosticProducingDelegate, at toolPath: Path) async throws -> DiscoveredTAPIToolSpecInfo {
     return try await producer.discoveredCommandLineToolSpecInfo(delegate, nil, [toolPath.str, "--version"]) { executionResult in
         let outputString = String(decoding: executionResult.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let match = try #/^Apple TAPI version.+\(tapi[_\w\d]*-(?<tapi>[\d.]+)\).*$/#.wholeMatch(in: outputString) else {
+        guard let tapiVersion = DiscoveredTAPIToolSpecInfo.versionRegex.firstMatch(in: outputString)?["tapi"] else {
             throw StubError.error("Could not parse tapi version from string '\(outputString)', command line '\(toolPath.str) --version'")
         }
 
-        return try DiscoveredTAPIToolSpecInfo(toolPath: toolPath, toolVersion: Version(String(match.output.tapi)))
+        return try DiscoveredTAPIToolSpecInfo(toolPath: toolPath, toolVersion: Version(tapiVersion))
     }
 }
 

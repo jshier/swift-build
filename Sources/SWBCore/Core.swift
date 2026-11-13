@@ -404,6 +404,8 @@ public final class Core: Sendable {
     private let libclangRegistry = Registry<Path, (Libclang?, Version?)>()
     private let stopAfterOpeningLibClang: Bool
 
+    private static let libclangVersionRegex = RegEx(patternLiteral: #"\(clang-(?<clang>[0-9]+(?:\.[0-9]+){0,})\)"#)
+
     public func lookupLibclang(path: Path) -> (libclang: Libclang?, version: Version?) {
         libclangRegistry.getOrInsert(path) {
             let libclang = Libclang(path: path.str)
@@ -413,8 +415,8 @@ public final class Core: Sendable {
             }
             let libclangVersion: Version?
             if let versionString = libclang?.getVersionString(),
-               let match = try? #/\(clang-(?<clang>[0-9]+(?:\.[0-9]+){0,})\)/#.firstMatch(in: versionString) {
-                libclangVersion = try? Version(String(match.clang))
+               let clang = Self.libclangVersionRegex.firstMatch(in: versionString)?["clang"] {
+                libclangVersion = try? Version(clang)
             } else {
                 libclangVersion = nil
             }

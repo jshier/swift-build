@@ -77,6 +77,8 @@ struct QNXSDP: Sendable {
         }
     }
 
+    private static let directoryRegex = RegEx(patternLiteral: #"\Aqnx[0-9]{3}\z"#)
+
     public static func findInstallations(host: OperatingSystem, fs: any FSProxy) async throws -> [QNXSDP] {
         var searchPaths = [Path.homeDirectory]
         if host == .windows {
@@ -90,7 +92,7 @@ struct QNXSDP: Sendable {
         for searchPath in searchPaths where fs.exists(searchPath) {
             // Swallow errors in case the directory is inaccessible (e.g. HOME could be /root and running as a non-root user)
             if let searchPathContents = try? fs.listdir(searchPath) {
-                if let path = try searchPathContents.filter({ try #/qnx[0-9]{3}/#.wholeMatch(in: $0) != nil }).sorted().reversed().map({ searchPath.join($0) }).first(where: { fs.exists($0) }) {
+                if let path = searchPathContents.filter({ Self.directoryRegex.firstMatch(in: $0) != nil }).sorted().reversed().map({ searchPath.join($0) }).first(where: { fs.exists($0) }) {
                     return try await [QNXSDP(host: host, path: path, configurationPath: getEnvironmentVariable("QNX_CONFIGURATION_EXCLUSIVE").map { Path($0) } ?? Path.homeDirectory.join(".qnx"))]
                 }
             }

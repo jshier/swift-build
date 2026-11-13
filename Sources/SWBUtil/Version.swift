@@ -279,17 +279,19 @@ public struct ProductBuildVersion: Hashable, CustomStringConvertible, Sendable {
         self.buildSuffix = buildSuffix
     }
 
+    private static let regex = RegEx(patternLiteral: #"\A(?<major>\d+)(?<minor>\w)(?<build>\d+)(?<suffix>\w*)\z"#)
+
     /// Parses a product build version from its string form, for example, "10A148a" or "10A150".
     public init(_ string: String) throws {
         let error = StubError.error("Unable to parse product build version '\(string)' because the input was in an invalid format.")
-        guard let match = try #/(?<major>\d+)(?<minor>\w)(?<build>\d+)(?<suffix>\w*)/#.wholeMatch(in: string) else {
+        guard let match: RegEx.MatchResult = Self.regex.firstMatch(in: string), let major = match["major"], let minor = match["minor"], let build = match["build"], let suffix = match["suffix"] else {
             // We are unable to parse the value.
             throw error
         }
-        self.major = UInt(match.output.major)!
-        self.train = Character(String(match.output.minor))
-        self.build = UInt(match.output.build)!
-        self.buildSuffix = String(match.output.suffix)
+        self.major = UInt(major)!
+        self.train = Character(minor)
+        self.build = UInt(build)!
+        self.buildSuffix = suffix
 
         // It's a "parse" error to not roundtrip to the same input.
         // This means that a build number like "010A0148A" (leading zeros)
